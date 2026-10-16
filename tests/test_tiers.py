@@ -4,6 +4,9 @@ from mercury.tiers import ModelTier, classify_model, is_student_tier, is_teacher
 def test_frontier_markers():
     assert classify_model("claude-opus-4.1") is ModelTier.FRONTIER
     assert classify_model("claude-fable-5") is ModelTier.FRONTIER
+    assert classify_model("gemini-4-argon-high") is ModelTier.FRONTIER
+    assert classify_model("gemini-4-argon") is ModelTier.FRONTIER
+    assert classify_model("gemini-3.1-pro") is ModelTier.FRONTIER
     assert classify_model("gpt-5") is ModelTier.FRONTIER
     assert classify_model("gpt-5.6-sol") is ModelTier.FRONTIER
     assert classify_model("o3") is ModelTier.FRONTIER

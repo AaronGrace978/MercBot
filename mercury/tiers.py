@@ -50,6 +50,9 @@ _FRONTIER_MARKERS: tuple[str, ...] = (
     "gpt-4.5",
     "gpt-4.1",
     # Google
+    "gemini-4-argon-high",
+    "gemini-4-argon",
+    "gemini-argon",
     "gemini-ultra",
     "gemini-3.1-pro",
     "gemini-3-pro",
@@ -73,6 +76,7 @@ _FRONTIER_MARKERS: tuple[str, ...] = (
     "minimax-m3",
     "minimax-m2.7",
     "minimax-m2",  # before lesser "mini" substring
+    "mistral-large-4",
     "mistral-large-3",
     "mistral-large",
     "gpt-oss:120b",

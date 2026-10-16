@@ -1,212 +1,150 @@
-# Mercury Harness
+# MERCBOT // Acid-Harness Frontier Agent Runtime
 
-![Mercury Harness](docs/mercury-harness-readme.png)
+![MercBot Acid-Harness Banner](docs/mercbot-hero-banner.jpg)
 
-A premium agent harness that **embeds how a frontier model operates into lesser models**.
+> **FRONTIER ONLY // NO POSERS.**  
+> An acid-punk **Frontier Agent Runtime** & **Tauri v2 Desktop App** built on top of the **Mercury Harness** — executing multi-step agent trajectories exclusively with **Google Gemini 4 Argon**, **Ollama Cloud Titans**, **Anthropic Fable/Opus**, **OpenAI GPT-5.6 Sol**, and **xAI Grok 4.7**, while distilling how frontier models operate into a local `.mercury` operational cortex.
 
-Start the work with a frontier model. Mercury records the *procedure* — tool order, recovery loops, what not to touch — and injects that operational knowledge into the next session even if that session runs on a cheaper model.
+---
 
-This is not answer distillation and not document RAG. Lesser models already have facts. What they lack is the frontier model's **operating system**: search before edit, read the failing test, recover from a red command without repeating the same patch.
+## Live Acid-Punk Tauri v2 Interface
 
-```
-Frontier run                     Mercury                         Lesser run
-─────────────                    ───────                         ──────────
-search → read →                  distill HOW                     operating pack
-test fails →                     into cards                      is prepended
-patch the real site →            embed + store                   so the student
-retest passes                    contrast vs fails               opens like Opus
-```
-
-## Why this works
-
-A frontier coding agent and a small model often share a tool belt. They diverge on **policy**:
-
-| Frontier (teacher) | Lesser (student) |
+| 01 // Agent Runtime Stage | 02 // Distilled Cortex Deck & Ollama Cloud Roster |
 |---|---|
-| Grep / read first | Patch the first file that sounds related |
-| Reproduce the failure | Assume the diagnosis |
-| Recover by changing approach | Retry the same edit |
-| Touch `session.ts` | Rewrite `login.tsx` |
+| ![MercBot Runtime Stage](docs/mercbot-runtime-stage.png) | ![MercBot Cortex Deck](docs/mercbot-cortex-deck.png) |
 
-Mercury captures those divergences as **operational cards**, embeds them in a local store, and compiles a **Frontier Operating Pack** that fits the student model's context budget.
+---
 
-Run the same class of task later on `gpt-4o-mini` or Haiku and the pack is sitting in the system prompt: the student inherits the teacher's hands, not a copied solution.
+## What Makes MercBot Slap
 
-## Flywheel
+1. **Strictly Frontier-Only Gatekeeper (`FrontierOnlyError`)**
+   - Lesser and mid-tier models (`gpt-4o-mini`, `claude-haiku-4`, `gemini-3.5-flash`, `gpt-oss:20b`, etc.) are **bounced at the door** when invoking the runtime.
+   - Only verified `ModelTier.FRONTIER` teacher models are listed and permitted to execute trajectories in the runtime.
+2. **Google Gemini 4 Argon + Ollama Cloud Flagships First-Class**
+   - Native multi-turn tool-calling adapters for **Google Gemini** (`gemini-4-argon-high`, `gemini-4-argon`, `gemini-3.1-pro` with `thoughtSignature` preservation) and **Ollama Cloud** (`deepseek-v4-pro:cloud`, `kimi-k3:cloud`, `kimi-k2.7-code:cloud`, `glm-5.3:cloud`, `minimax-m3:cloud`, `qwen3.5:397b-cloud`, `qwen3-coder:480b-cloud`, `gpt-oss:120b-cloud`, `mistral-large-4:cloud`, `mistral-large-3:cloud`, `nemotron-3-ultra:cloud`).
+3. **The Mercury Operational Flywheel**
+   - **Capture** live or synthesized frontier agent runs (`grep` → `read` → `shell` reproduce → `search_replace` patch → `shell` verify).
+   - **Mid-Run Recovery Injection**: When a tool call comes back red during a run, `MercuryAgentRuntime` queries the `.mercury` hybrid store (character n-gram hashing + BM25 + RRF) with the error signature and injects recovery cards on the fly.
+   - **Distill** operational cards: `PLAYBOOK`, `DECISION` (`✓ CHOSE` vs `✗ REJECTED`), `CONTRAST`, `RECOVERY`, `TOOL_POLICY`, `STANDING_ORDER`, `HEURISTIC`, and `ANTI_PATTERN`.
+   - **Deterministic Behavior Grader (No LLM Judge)**: Every run is scored on a **Policy Floor** (`explored_first`, `read_before_edit`, `verified_after_edit`, `no_blind_retry`, `recovered_after_error`, `outcome_recorded`) and a **Competence Ceiling** (`evidence_depth`, `focused_edits`, `no_edit_thrash`, `phase_completeness`).
 
-1. **Capture** a frontier agent trace (Mercury JSON, OpenAI messages, or Cursor-like tool turns).
-2. **Distill** playbooks, tool policies, recovery cards, heuristics, anti-patterns.
-3. **Contrast** a failed lesser run against a successful frontier run on the same task — the highest-signal cards ("don't start with `search_replace` on `login.tsx`").
-4. **Embed** with a local hashing vector + BM25 hybrid retriever (no API key, no model download).
-5. **Inject** a token-budgeted operating pack at lesser-model session start, or as a Cursor rule.
+---
 
-Teacher traces are gated by model tier. Opus / Fable / GPT-5.6 Sol / Grok-4 / o3 teach — and so do Ollama Cloud flagships such as `deepseek-v4-pro`, `kimi-k3`, `glm-5.3`, `minimax-m3`, `gpt-oss:120b`, and `qwen3.5:397b`. Mini / Haiku / Flash / Luna receive. Successful student traces do not pollute the store unless you opt in.
+## Frontier Model Roster (`mercury models`)
 
-### Recognized model tiers
+| Provider | Model ID | Name | Context | Highlights |
+|---|---|---|---|---|
+| **Google Gemini** | `gemini-4-argon-high` | Gemini 4 Argon (High Thinking) | 2,000K | Deep-thinking Argon flagship, surgical localization |
+| **Google Gemini** | `gemini-4-argon` | Gemini 4 Argon | 2,000K | High-velocity Argon frontier core |
+| **Google Gemini** | `gemini-3.1-pro` | Gemini 3.1 Pro | 2,000K | Long-horizon polyglot code & trace teacher |
+| **Ollama Cloud** | `deepseek-v4-pro:cloud` | DeepSeek V4 Pro (Ollama Cloud) | 256K | Flagship MoE reasoning beast (`deepseek-v4-pro:0813`) |
+| **Ollama Cloud** | `kimi-k3:cloud` | Kimi K3 (Ollama Cloud) | 256K | Moonshot agent-native powerhouse (`kimi-k3`) |
+| **Ollama Cloud** | `kimi-k2.7-code:cloud` | Kimi K2.7 Code (Ollama Cloud) | 256K | Code-specialized frontier agent (`kimi-k2.7-code`) |
+| **Ollama Cloud** | `glm-5.3:cloud` | GLM-5.3 (Ollama Cloud) | 200K | Zhipu terminal & recovery titan (`glm-5.3`) |
+| **Ollama Cloud** | `minimax-m3:cloud` | MiniMax M3 (Ollama Cloud) | 512K | 512K-context repository sweeper (`minimax-m3`) |
+| **Ollama Cloud** | `qwen3.5:397b-cloud` | Qwen 3.5 397B (Ollama Cloud) | 256K | 397B open-weights polyglot colossus |
+| **Ollama Cloud** | `qwen3-coder:480b-cloud` | Qwen3-Coder 480B (Ollama Cloud) | 256K | 480B specialist coding juggernaut |
+| **Ollama Cloud** | `gpt-oss:120b-cloud` | GPT-OSS 120B (Ollama Cloud) | 128K | 120B open-weight frontier tool caller |
+| **Ollama Cloud** | `mistral-large-4:cloud` | Mistral Large 4 (Ollama Cloud) | 256K | Mistral Large 4 frontier flagship |
+| **Ollama Cloud** | `mistral-large-3:cloud` | Mistral Large 3 675B (Ollama Cloud) | 256K | 675B structured tool execution flagship |
+| **Ollama Cloud** | `nemotron-3-ultra:cloud` | Nemotron 3 Ultra (Ollama Cloud) | 256K | NVIDIA Ultra-tier reasoning flagship |
+| **Anthropic** | `claude-fable-5-1` | Claude Fable 5.1 | 500K | Next-gen Fable architecture, zero edit thrash |
+| **Anthropic** | `claude-opus-5-5` | Claude Opus 5.5 | 500K | Heavyweight Opus 5.5 architectural debugger |
+| **Anthropic** | `claude-opus-4-8` | Claude Opus 4.8 Max | 400K | Maximum-compute root-cause teacher |
+| **OpenAI** | `gpt-5.6-sol` | GPT-5.6 Sol High | 400K | Solar-class apex reasoning & verify loops |
+| **OpenAI** | `gpt-5.3-codex` | GPT-5.3 Codex | 400K | Terminal-native Codex frontier agent |
+| **OpenAI** | `o3-pro` | OpenAI o3-pro | 200K | Deliberative search-tree reasoning |
+| **xAI** | `grok-4.7` | Grok 4.7 High | 256K | High-speed frontier exploration & recovery |
 
-| Tier | Role | Examples |
-|---|---|---|
-| **Frontier** (teacher) | Distill operating packs | `claude-opus-4.1`, `claude-fable-5`, `gpt-5.6-sol`, `grok-4.5`, Ollama Cloud: `deepseek-v4-pro`, `kimi-k3`, `glm-5.3`, `minimax-m3`, `mistral-large-3`, `gpt-oss:120b`, `nemotron-3-ultra` |
-| **Capable** (student) | Receive larger packs | `claude-sonnet-5`, `gpt-5.6-terra`, `gpt-oss:20b`, `gemma4:31b`, `nemotron-3-super`, `qwen3.5` |
-| **Lesser** (student) | Receive tight packs | `gpt-4o-mini`, `gpt-5.6-luna`, `haiku`, `gemini-3.5-flash`, `deepseek-v4-flash`, `glm-5.3-flash`, `nemotron-3-nano` |
+---
 
-Cloud and local Ollama ids both work (`kimi-k3:cloud`, `gpt-oss:120b-cloud`).
+## Quick Start
 
-## Install
-
-```bash
-pip install -e ".[dev]"
-```
-
-Python 3.10+. Runtime dependency: Pydantic v2.
-
-## Quick start
-
-```bash
-mercury init
-mercury demo
-```
-
-`mercury demo` captures two built-in Opus traces (auth redirect + flaky pytest), contrasts them with a failed mini run, and prints the pack a lesser model would see for the login bug.
-
-### Capture your own frontier run
-
-```bash
-mercury capture traces/opus-auth.json
-mercury pack --task "Users bounce to /login after authenticating" --model gpt-4o-mini
-```
-
-Write the pack into a Cursor rule:
+### 1. Install the Python Runtime
 
 ```bash
-mercury pack --task "Fix the login redirect loop" --model gpt-4o-mini --format cursor-rule \
-  > .cursor/rules/mercury.mdc
+uv sync --extra dev
+# or: pip install -e ".[dev]"
 ```
 
-Export JSON for a custom agent loop:
+Configure `.env` in the repo root for live provider execution:
+
+```ini
+GEMINI_API_KEY=your_google_gemini_key
+OLLAMA_API_KEY=your_ollama_cloud_key
+OLLAMA_HOST=https://ollama.com
+```
+
+### 2. Run the Frontier Agent Runtime via CLI
 
 ```bash
-mercury pack --task "Fix the login redirect loop" --format json
+# List all verified Frontier models (or filter by --provider google | ollama_cloud | anthropic | openai | xai)
+uv run python -m mercury models
+
+# Execute a live multi-step agent trajectory on Google Gemini 4 Argon
+uv run python -m mercury run --model gemini-4-argon-high --mode live \
+  --task "Use grep to find _FRONTIER_MARKERS in mercury/tiers.py and summarize how Gemini Argon and Ollama Cloud are classified."
+
+# Execute a live trajectory on Ollama Cloud (Kimi K3 / DeepSeek V4 Pro / GLM-5.3)
+uv run python -m mercury run --model kimi-k3:cloud --mode live \
+  --task "Inspect mercury/runtime.py and explain how mid-run recovery injection works."
+
+# Compile a Frontier Operating Pack (.cursor/rules/mercury.mdc, markdown, dpo, or sft)
+uv run python -m mercury pack --task "Fix the login redirect loop" --model gpt-4o-mini --format cursor-rule
 ```
 
-### Contrast a cheap failure with a frontier success
+### 3. Launch the Acid-Punk Desktop / Web UI (Tauri v2 + React + Vite)
+
+Start the local Mercury bridge server and the frontend (or launch the native Tauri window):
 
 ```bash
-mercury contrast traces/mini-failed.json traces/opus-success.json
+# Terminal 1: Start the Mercury HTTP bridge on port 8765
+uv run python -m mercury serve --port 8765
+
+# Terminal 2: Launch the Vite UI (http://localhost:5173) or Tauri v2 Desktop Window
+cd app
+npm install
+npm run dev
+# Or for the native Rust/Tauri v2 desktop window:
+npm run tauri dev
 ```
 
-That is the core innovation: **negative knowledge**. The lesser model documents what not to do; the frontier model documents the replacement procedure.
-
-### Grade how a run operated (no LLM judge)
-
-```bash
-mercury grade traces/opus-success.json
-mercury grade traces/mini-before.json --compare traces/mini-after-pack.json
-```
-
-Deterministic behavioral checks — policy floor plus competence ceiling — scored and printed as a report or JSON. Grade a lesser run before and after a Frontier Operating Pack to prove the pack changed *how it operated*, not just what it answered.
+---
 
 ## Python API
 
 ```python
-from mercury import MercuryHarness
+from mercury import MercuryAgentRuntime, list_frontier_models
 
-harness = MercuryHarness.init(".mercury")
-harness.capture("traces/opus-auth.json")
-pack = harness.pack(
-    "Login redirects back to /login after a successful password check",
-    model="gpt-4o-mini",
+# 1. Inspect strictly-frontier models across Google Argon, Ollama Cloud, etc.
+for spec in list_frontier_models("ollama_cloud"):
+    print(spec.id, "->", spec.name)
+
+# 2. Run the Frontier Agent Runtime (automatically captures & distills cards into .mercury)
+runtime = MercuryAgentRuntime(store_path=".mercury", default_model="gemini-4-argon-high")
+result = runtime.run(
+    "Login keeps redirecting back to /login after a successful password check",
+    model="gemini-4-argon-high",
+    mode="auto",
 )
-print(pack.render())
+
+print(result.grade.summary())
+print(f"Distilled {len(result.distilled_cards)} operational cards")
+print(result.final_response)
 ```
 
-Drop `pack.render()` into the student system's prompt. Mid-run, if a tool comes back red, retrieve recovery cards with the error text:
-
-```python
-pack = harness.pack(
-    "still bouncing to /login",
-    model="gpt-4o-mini",
-    error_signature="AssertionError: expected '/login' to be '/dashboard'",
-)
-```
-
-## What gets distilled
-
-| Card | Source |
-|---|---|
-| **Playbook** | Compressed phase sequence: explore → localize → edit → verify |
-| **Tool policy** | First action + preferred tool order |
-| **Decision** | Chose X over Y — rejected branches, not just the path taken |
-| **Recovery** | Error-like tool result + the next 1–5 frontier moves |
-| **Heuristic** | Test-before-patch, retest-after-edit |
-| **Anti-pattern** | Self-corrections ("actually…") and edit-first failures |
-| **Standing order** | Seeded on cold start; provisional from 1 teacher; majority after ≥2 |
-| **Contrast** | Student/teacher divergence on a matched task (explicit rejected moves) |
-
-Cards carry confidence, task type, languages, optional `chose` / `rejected` fields, and an error signature so retrieval can bias toward the current failure.
-
-## Honest limits (and how Mercury addresses them)
-
-1. **Path ≠ judgment.** A raw playbook only shows what happened. Decision cards and contrast pairs record what was chosen *against* (edit-first, wrong file, blind retry) so the pack transfers judgment, not surface mimicry.
-2. **Cold start.** Standing orders no longer wait for majority volume. Empty stores get seeded defaults; a single successful frontier trace promotes provisional orders; ≥2 successful teachers confirm them via majority thresholds.
-3. **Cross-harness tool names.** `normalize_tool()` maps Cursor / Claude Code / Codex / OpenAI aliases (`rg`, `StrReplace`, `run_terminal_cmd`, `Bash`, …) onto canonical families before phase segmentation and grading.
-4. **Grade is a floor and a ceiling.** Policy checks (`explored_first`, `read_before_edit`, …) are the floor. Competence checks (`evidence_depth`, `focused_edits`, `no_edit_thrash`, `phase_completeness`) catch explore-once-then-flail. Prefer `policy_score` / `competence_score`, or `mercury grade A.json --compare B.json` as a before/after pack delta.
-
-## Trace format
-
-Canonical Mercury JSON:
-
-```json
-{
-  "id": "trace_frontier_auth_redirect",
-  "model": "claude-opus-4.1",
-  "task": "Login keeps redirecting back to /login after a successful password check",
-  "outcome": { "status": "success", "summary": "SameSite Strict → Lax" },
-  "events": [
-    { "type": "user", "content": "Login keeps redirecting..." },
-    {
-      "type": "assistant",
-      "content": "Search before editing.",
-      "tool_calls": [{ "name": "grep", "arguments": { "pattern": "SameSite" } }]
-    },
-    { "type": "tool", "tool_name": "grep", "content": "src/lib/session.ts:18: sameSite: 'strict'" }
-  ]
-}
-```
-
-OpenAI-style `messages` with `tool_calls` / `role: tool` are accepted. Outcome `success` | `failure` | `partial` | `unknown` gates teaching strength.
-
-## Design choices
-
-- **Operate, don't memorize.** The pack tells the student *how to move*, not the patch to paste. That is what transfers across files and codebases.
-- **Local by default.** Embeddings are character n-gram hashing; lexical ranking is BM25. Hybrid fusion is reciprocal rank. The store is SQLite under `.mercury/`.
-- **Budget by tier.** Mini-class models get ~1400 tokens of pack. Sonnet-class gets more. Frontier students get nothing — they are the teacher.
-- **Teachers are gated.** A successful Haiku run does not overwrite Opus policy unless `--teacher` or `allow_student_success`.
-
-## CLI
-
-```
-mercury init
-mercury capture TRACE.json [--teacher]
-mercury distill
-mercury pack --task "..." [--model NAME] [--error SIG] [--format markdown|cursor-rule|json]
-mercury contrast STUDENT.json TEACHER.json
-mercury grade TRACE.json [--compare AFTER.json] [--json]
-mercury status
-mercury demo
-```
+---
 
 ## Tests
 
 ```bash
-pytest
+uv run --extra dev pytest
 ```
+
+---
 
 ## License
 
 **Proprietary — Copyright © 2026 Aaron Grace. All rights reserved.**
 
-Mercury Harness is proprietary software owned exclusively by Aaron Grace.
-No permission is granted to use, copy, modify, merge, publish, distribute,
-sublicense, or sell this software except under a separate written agreement
-with Aaron Grace. See [`LICENSE`](LICENSE) for the full terms.
+See [`LICENSE`](LICENSE) for full terms.

@@ -51,6 +51,7 @@ class ToolCall(BaseModel):
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     call_id: str | None = None
+    thought_signature: str | None = None
 
 
 class TraceEvent(BaseModel):

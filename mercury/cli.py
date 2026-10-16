@@ -12,6 +12,8 @@ from mercury.harness import MercuryHarness
 
 
 def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
         prog="mercury",
         description="Capture frontier agent operations and embed them into lesser-model sessions.",
@@ -65,6 +67,46 @@ def main(argv: list[str] | None = None) -> int:
     grade.add_argument("--json", action="store_true", help="Print the grade as JSON")
     demo = sub.add_parser("demo", help="Run the built-in frontier → lesser flywheel on fixture traces")
     demo.add_argument("--json", action="store_true", help="Print pack as JSON")
+
+    models_cmd = sub.add_parser(
+        "models",
+        help="List strictly FRONTIER models (Google Gemini Argon, Ollama Cloud, Anthropic, OpenAI, xAI)",
+    )
+    models_cmd.add_argument(
+        "--provider",
+        default=None,
+        help="Filter by provider (google, ollama_cloud, anthropic, openai, xai)",
+    )
+    models_cmd.add_argument("--json", action="store_true", help="Print frontier models as JSON")
+
+    run_cmd = sub.add_parser(
+        "run",
+        help="Run the Mercury Frontier Agent Runtime on a task",
+    )
+    run_cmd.add_argument("--task", required=True, help="Task for the frontier agent runtime")
+    run_cmd.add_argument(
+        "--model",
+        default="gemini-4-argon-high",
+        help="Frontier model ID (default: gemini-4-argon-high)",
+    )
+    run_cmd.add_argument(
+        "--mode",
+        choices=("auto", "live", "synth"),
+        default="auto",
+        help="Execution mode (auto, live provider, or synth trajectory)",
+    )
+    run_cmd.add_argument("--json", action="store_true", help="Print full run telemetry as JSON")
+
+    serve_cmd = sub.add_parser("serve", help="Start the local MercBot HTTP bridge server")
+    serve_cmd.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    serve_cmd.add_argument("--port", type=int, default=8765, help="Bind port (default: 8765)")
+
+    bridge_cmd = sub.add_parser("bridge", help="Single-shot JSON bridge for Tauri desktop IPC")
+    bridge_cmd.add_argument(
+        "action",
+        choices=("state", "run", "contrast", "pack", "reinforce", "seed"),
+    )
+    bridge_cmd.add_argument("--payload", default="{}", help="JSON payload string")
 
     args = parser.parse_args(argv)
     harness = MercuryHarness.init(args.store)
@@ -135,6 +177,65 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "demo":
         return _run_demo(harness, as_json=args.json)
+
+    if args.command == "models":
+        from mercury.providers import list_frontier_models
+
+        models = list_frontier_models(args.provider)
+        if args.json:
+            json.dump([m.model_dump() for m in models], sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        else:
+            print(f"MERCURY FRONTIER MODEL CATALOG ({len(models)} frontier models):")
+            for m in models:
+                cloud_tag = " [OLLAMA CLOUD]" if m.is_ollama_cloud else ""
+                print(f"  - {m.id:<26} | {m.provider_label:<14} | {m.name}{cloud_tag}")
+        return 0
+
+    if args.command == "run":
+        from mercury.runtime import MercuryAgentRuntime
+
+        runtime = MercuryAgentRuntime(harness, store_path=args.store)
+        result = runtime.run(args.task, model=args.model, mode=args.mode)
+        if args.json:
+            json.dump(result.as_dict(), sys.stdout, indent=2, default=str)
+            sys.stdout.write("\n")
+        else:
+            print(f"Ran {result.model_spec.name} ({result.model_spec.id}) in {result.mode_used} mode")
+            print(f"Trace: {result.trace.id} | Distilled {len(result.distilled_cards)} card(s)")
+            print(result.grade.summary())
+            print()
+            print(result.final_response)
+        return 0
+
+    if args.command == "serve":
+        from mercury.server import serve_http
+
+        harness.close()
+        serve_http(host=args.host, port=args.port, store_path=args.store)
+        return 0
+
+    if args.command == "bridge":
+        from mercury.server import MercuryBridge
+
+        harness.close()
+        bridge = MercuryBridge(store_path=args.store)
+        payload = json.loads(args.payload) if args.payload else {}
+        if args.action == "state":
+            out = bridge.get_state()
+        elif args.action == "run":
+            out = bridge.run_agent(payload)
+        elif args.action == "contrast":
+            out = bridge.run_contrast(payload)
+        elif args.action == "pack":
+            out = bridge.compile_pack(payload)
+        elif args.action == "reinforce":
+            out = bridge.reinforce_card(payload)
+        else:
+            out = bridge.seed_default_traces()
+        json.dump(out, sys.stdout, default=str)
+        sys.stdout.write("\n")
+        return 0
 
     return 1
 
