@@ -1,8 +1,28 @@
 use serde_json::Value;
+use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
 fn repo_root() -> PathBuf {
+    if let Ok(cwd) = env::current_dir() {
+        if cwd.join("mercury").is_dir() {
+            return cwd;
+        }
+        if let Some(parent) = cwd.parent() {
+            if parent.join("mercury").is_dir() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+    if let Ok(exe) = env::current_exe() {
+        let mut cur = exe.parent();
+        while let Some(dir) = cur {
+            if dir.join("mercury").is_dir() {
+                return dir.to_path_buf();
+            }
+            cur = dir.parent();
+        }
+    }
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest
         .parent()
