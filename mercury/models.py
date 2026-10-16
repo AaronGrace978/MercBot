@@ -131,10 +131,28 @@ class OperationalCard(BaseModel):
     confidence: float = 0.5
     languages: list[str] = Field(default_factory=list)
     error_signature: str | None = None
+    uses: int = 0
+    successes: int = 0
+    failures: int = 0
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
+
+    @property
+    def reinforcement_bonus(self) -> float:
+        """Bayesian-smoothed win-rate bonus/penalty from empirical student outcomes."""
+        total = self.successes + self.failures
+        if total == 0:
+            return 0.0
+        # Smoothed win rate centered at 0.5, scaled to [-0.25, +0.25]
+        rate = (self.successes + 1.0) / (total + 2.0)
+        weight = min(1.0, total / 4.0)
+        return (rate - 0.5) * 0.5 * weight
+
+    @property
+    def effective_confidence(self) -> float:
+        return max(0.05, min(0.99, self.confidence + self.reinforcement_bonus))
 
     def searchable_text(self) -> str:
         parts = [

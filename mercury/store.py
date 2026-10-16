@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from mercury.embed import BM25Index
 from mercury.models import AgentTrace, OperationalCard
 from mercury.traceio import parse_trace
 
@@ -49,10 +50,19 @@ class KnowledgeStore:
         self.db_path = self.path / "mercury.sqlite"
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(SCHEMA)
         self._conn.commit()
+        self._cards_cache: list[tuple[OperationalCard, list[float] | None]] | None = None
+        self._bm25_cache: BM25Index | None = None
+
+    def _invalidate_cache(self) -> None:
+        self._cards_cache = None
+        self._bm25_cache = None
 
     def close(self) -> None:
+        self._invalidate_cache()
         self._conn.close()
 
     def put_trace(self, trace: AgentTrace) -> None:
@@ -115,6 +125,7 @@ class KnowledgeStore:
             ),
         )
         self._conn.commit()
+        self._invalidate_cache()
 
     def put_cards(self, cards: Iterable[OperationalCard], embeddings: dict[str, list[float]] | None = None) -> int:
         count = 0
@@ -124,18 +135,56 @@ class KnowledgeStore:
             count += 1
         return count
 
+    def get_card(self, card_id: str) -> OperationalCard | None:
+        row = self._conn.execute("SELECT json FROM cards WHERE id = ?", (card_id,)).fetchone()
+        if row is None:
+            return None
+        return OperationalCard.model_validate_json(row["json"])
+
+    def record_outcome(self, card_ids: Iterable[str], *, succeeded: bool) -> int:
+        """Reinforce or decay cards based on a student run outcome."""
+        updated = 0
+        for cid in set(card_ids):
+            row = self._conn.execute(
+                "SELECT json, embedding FROM cards WHERE id = ?", (cid,)
+            ).fetchone()
+            if row is None:
+                continue
+            card = OperationalCard.model_validate_json(row["json"])
+            card.uses += 1
+            if succeeded:
+                card.successes += 1
+            else:
+                card.failures += 1
+            embedding = json.loads(row["embedding"]) if row["embedding"] else None
+            self.put_card(card, embedding)
+            updated += 1
+        return updated
+
     def cards(self) -> list[OperationalCard]:
-        rows = self._conn.execute("SELECT json FROM cards ORDER BY confidence DESC").fetchall()
-        return [OperationalCard.model_validate_json(row["json"]) for row in rows]
+        return [card for card, _ in self.cards_with_embeddings()]
 
     def cards_with_embeddings(self) -> list[tuple[OperationalCard, list[float] | None]]:
+        if self._cards_cache is not None:
+            return list(self._cards_cache)
         rows = self._conn.execute("SELECT json, embedding FROM cards ORDER BY confidence DESC").fetchall()
         out: list[tuple[OperationalCard, list[float] | None]] = []
         for row in rows:
             card = OperationalCard.model_validate_json(row["json"])
             embedding = json.loads(row["embedding"]) if row["embedding"] else None
             out.append((card, embedding))
-        return out
+        self._cards_cache = out
+        return list(out)
+
+    def bm25_index(self) -> BM25Index:
+        if self._bm25_cache is not None:
+            return self._bm25_cache
+        rows = self.cards_with_embeddings()
+        texts = [card.searchable_text() for card, _ in rows]
+        bm25 = BM25Index()
+        bm25.fit(texts)
+        self._bm25_cache = bm25
+        return bm25
 
     def stats(self) -> dict[str, int | float]:
         trace_count = self._conn.execute("SELECT COUNT(*) AS n FROM traces").fetchone()["n"]

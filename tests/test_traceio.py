@@ -56,3 +56,50 @@ def test_task_and_error_fingerprints():
     assert "assert" in sig or "fail" in sig
     assert "12" not in sig
     assert looks_like_error("Traceback (most recent call last):\nError: boom")
+
+
+def test_anthropic_blocks_and_jsonl_parse(tmp_path):
+    from mercury.traceio import load_trace
+
+    claude = parse_trace(
+        {
+            "model": "claude-opus-4.1",
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Fix the auth session bug"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Searching first."},
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "grep",
+                            "input": {"pattern": "session", "path": "src/session.ts"},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": "src/session.ts:10: setSession",
+                        }
+                    ],
+                },
+            ],
+            "outcome": "success",
+        }
+    )
+    assert claude.tool_sequence() == ["grep"]
+    assert "src/session.ts" in claude.files_touched
+
+    jsonl_file = tmp_path / "trace.jsonl"
+    jsonl_file.write_text(
+        '{"role": "user", "content": "Fix pytest failure"}\n'
+        '{"role": "assistant", "tool_calls": [{"name": "rg", "arguments": {"pattern": "test"}}]}\n',
+        encoding="utf-8",
+    )
+    loaded = load_trace(jsonl_file)
+    assert loaded.tool_sequence() == ["rg"]

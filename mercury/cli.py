@@ -31,7 +31,20 @@ def main(argv: list[str] | None = None) -> int:
     pack.add_argument("--task", required=True, help="The student model's upcoming task")
     pack.add_argument("--model", default="gpt-4o-mini", help="Student model name")
     pack.add_argument("--error", dest="error", default=None, help="Optional current error signature")
-    pack.add_argument("--format", choices=("markdown", "cursor-rule", "json"), default="markdown")
+    pack.add_argument(
+        "--format",
+        choices=("markdown", "cursor-rule", "json", "sft", "dpo"),
+        default="markdown",
+    )
+
+    reinforce = sub.add_parser(
+        "reinforce",
+        help="Reinforce or decay operational cards based on a student run outcome",
+    )
+    reinforce.add_argument("cards", nargs="+", help="Card IDs injected into the student run")
+    outcome_group = reinforce.add_mutually_exclusive_group(required=True)
+    outcome_group.add_argument("--success", action="store_true", help="Student run succeeded")
+    outcome_group.add_argument("--failure", action="store_true", help="Student run failed")
 
     contrast = sub.add_parser("contrast", help="Distill divergence between a failed lesser run and a successful frontier run")
     contrast.add_argument("student", help="Failed lesser-model trace JSON")
@@ -75,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "pack":
         pack_obj = harness.pack(args.task, model=args.model, error_signature=args.error)
         _print_pack(pack_obj, args.format)
+        return 0
+
+    if args.command == "reinforce":
+        updated = harness.record_outcome(args.cards, succeeded=bool(args.success))
+        state = "succeeded" if args.success else "failed"
+        print(f"Recorded {state} outcome across {updated} card(s)")
         return 0
 
     if args.command == "contrast":
@@ -126,6 +145,14 @@ def _print_pack(pack, fmt: str) -> None:
         return
     if fmt == "cursor-rule":
         sys.stdout.write(pack.as_cursor_rule())
+        return
+    if fmt == "sft":
+        json.dump(pack.as_finetune_rows(), sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return
+    if fmt == "dpo":
+        json.dump(pack.as_dpo_rows(), sys.stdout, indent=2)
+        sys.stdout.write("\n")
         return
     payload = {
         "task": pack.task,

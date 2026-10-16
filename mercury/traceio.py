@@ -23,7 +23,16 @@ def load_trace(source: str | Path | dict[str, Any]) -> AgentTrace:
         payload = source
     else:
         path = Path(source)
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw_text = path.read_text(encoding="utf-8").strip()
+        try:
+            payload = json.loads(raw_text)
+        except json.JSONDecodeError:
+            # Support JSONL trace logs (one event/message JSON object per line)
+            lines = [json.loads(line) for line in raw_text.splitlines() if line.strip()]
+            if lines and isinstance(lines[0], dict) and "role" in lines[0]:
+                payload = {"messages": lines}
+            else:
+                payload = {"task": "", "events": lines}
     return parse_trace(payload)
 
 
@@ -64,27 +73,74 @@ def _parse_canonical(payload: dict[str, Any]) -> AgentTrace:
 def _parse_messages(payload: dict[str, Any]) -> AgentTrace:
     messages = payload["messages"]
     events: list[TraceEvent] = []
+    call_id_to_name: dict[str, str] = {}
     for message in messages:
         role = str(message.get("role") or "assistant").lower()
+        raw_content = message.get("content")
         if role == "tool":
-            content = _content_to_text(message.get("content"))
+            content = _content_to_text(raw_content)
+            call_id = message.get("tool_call_id")
+            t_name = message.get("name") or message.get("tool_name") or (call_id_to_name.get(str(call_id)) if call_id else None)
             events.append(
                 TraceEvent(
                     type=EventType.TOOL,
                     content=content,
-                    tool_name=message.get("name") or message.get("tool_name"),
-                    tool_call_id=message.get("tool_call_id"),
+                    tool_name=t_name,
+                    tool_call_id=call_id,
                     is_error=bool(message.get("is_error")) or looks_like_error(content),
                 )
             )
             continue
+
+        # Handle Anthropic-style tool_result blocks inside user messages
+        if role == "user" and isinstance(raw_content, list) and any(
+            isinstance(part, dict) and part.get("type") == "tool_result" for part in raw_content
+        ):
+            text_parts: list[str] = []
+            for part in raw_content:
+                if isinstance(part, dict) and part.get("type") == "tool_result":
+                    res_text = _content_to_text(part.get("content"))
+                    t_use_id = part.get("tool_use_id")
+                    t_name = part.get("name") or part.get("tool_name") or (call_id_to_name.get(str(t_use_id)) if t_use_id else None)
+                    events.append(
+                        TraceEvent(
+                            type=EventType.TOOL,
+                            content=res_text,
+                            tool_name=t_name,
+                            tool_call_id=t_use_id,
+                            is_error=bool(part.get("is_error")) or looks_like_error(res_text),
+                        )
+                    )
+                elif isinstance(part, dict) and "text" in part:
+                    text_parts.append(str(part["text"]))
+                elif isinstance(part, str):
+                    text_parts.append(part)
+            if text_parts:
+                events.append(TraceEvent(type=EventType.USER, content="\n".join(text_parts)))
+            continue
+
         event_type = {
             "user": EventType.USER,
             "system": EventType.SYSTEM,
             "assistant": EventType.ASSISTANT,
         }.get(role, EventType.ASSISTANT)
         tool_calls = [_parse_tool_call(raw) for raw in message.get("tool_calls") or []]
-        content = _content_to_text(message.get("content"))
+        # Extract Anthropic-style tool_use blocks from assistant content list
+        if isinstance(raw_content, list):
+            for part in raw_content:
+                if isinstance(part, dict) and part.get("type") == "tool_use":
+                    tc = _parse_tool_call(
+                        {
+                            "id": part.get("id"),
+                            "name": part.get("name"),
+                            "arguments": part.get("input") or part.get("arguments") or {},
+                        }
+                    )
+                    tool_calls.append(tc)
+        for tc in tool_calls:
+            if tc.call_id:
+                call_id_to_name[tc.call_id] = tc.name
+        content = _content_to_text(raw_content)
         events.append(
             TraceEvent(
                 type=event_type,

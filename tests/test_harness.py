@@ -78,6 +78,37 @@ def test_cursor_rule_and_finetune_export(tmp_path):
     rows = pack.as_finetune_rows()
     assert rows
     assert "input" in rows[0] and "output" in rows[0]
+    dpo_rows = pack.as_dpo_rows()
+    assert dpo_rows
+    assert "prompt" in dpo_rows[0] and "chosen" in dpo_rows[0] and "rejected" in dpo_rows[0]
+
+
+def test_reinforcement_outcome_feedback_loop(tmp_path):
+    harness = MercuryHarness.init(tmp_path / "store")
+    harness.capture(frontier_auth_fix())
+    pack = harness.pack("fix the login redirect loop", model="gpt-4o-mini")
+    assert pack.card_ids
+    target_id = pack.card_ids[0]
+    before_card = harness.store.get_card(target_id)
+    assert before_card is not None
+    assert before_card.uses == 0
+
+    updated = harness.record_outcome(pack, succeeded=True)
+    assert updated == len(set(pack.card_ids))
+    after_card = harness.store.get_card(target_id)
+    assert after_card is not None
+    assert after_card.uses == 1
+    assert after_card.successes == 1
+    assert after_card.reinforcement_bonus > 0
+    assert after_card.effective_confidence > before_card.confidence
+
+
+def test_short_identifier_retrieval(tmp_path):
+    harness = MercuryHarness.init(tmp_path / "store")
+    harness.capture(frontier_auth_fix())
+    # Short 3-char query token should still retrieve matching cards when relevant
+    pack = harness.pack("fix sso jwt bug", model="gpt-4o-mini")
+    assert pack.cards
 
 
 def test_mid_run_error_signature_retrieves_recovery(tmp_path):

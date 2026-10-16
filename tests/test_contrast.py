@@ -16,3 +16,6 @@ def test_contrast_emits_first_action_and_file_divergence():
     assert first.chose
     assert first.rejected
     assert "search_replace" in " ".join(first.rejected).lower() or "search_replace" in first.procedure.lower()
+    phase_card = next(card for card in cards if "phase order" in card.title.lower())
+    assert "skipped_phases" in phase_card.metadata
+    assert "explore" in phase_card.metadata["skipped_phases"]

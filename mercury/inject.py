@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from mercury.embed import EmbedderProtocol
 from mercury.fingerprint import classify_task
 from mercury.models import CardKind, OperationalCard
 from mercury.retrieve import ScoredCard, retrieve
@@ -19,6 +20,10 @@ class OperatingPack:
     cards: list[OperationalCard] = field(default_factory=list)
     scores: list[float] = field(default_factory=list)
     token_budget: int = 1400
+
+    @property
+    def card_ids(self) -> list[str]:
+        return [card.id for card in self.cards]
 
     def estimated_tokens(self) -> int:
         return sum(card.estimated_tokens() for card in self.cards) + 80
@@ -88,11 +93,27 @@ class OperatingPack:
             )
         return rows
 
+    def as_dpo_rows(self) -> list[dict[str, str]]:
+        """Export preference pairs (prompt, chosen, rejected) from decision/contrast cards."""
+        rows: list[dict[str, str]] = []
+        for card in self.cards:
+            if not card.chose or not card.rejected:
+                continue
+            rows.append(
+                {
+                    "prompt": f"Situation: {card.situation}\nHow should the agent operate?",
+                    "chosen": f"{card.chose} — {card.procedure}",
+                    "rejected": "; ".join(card.rejected),
+                }
+            )
+        return rows
+
 
 def build_pack(
     store: KnowledgeStore,
     task: str,
     *,
+    embedder: EmbedderProtocol | None = None,
     model: str = "gpt-4o-mini",
     error_signature: str | None = None,
     languages: list[str] | None = None,
@@ -108,6 +129,7 @@ def build_pack(
     scored = retrieve(
         store,
         task,
+        embedder=embedder,
         task_type=task_type,
         error_signature=error_signature,
         languages=languages,

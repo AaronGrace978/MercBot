@@ -57,3 +57,23 @@ def test_cli_grade_command(tmp_path, capsys):
     delta_out = capsys.readouterr().out
     assert code == 0
     assert "Grade delta" in delta_out
+
+
+def test_cli_reinforce_and_dpo_export(tmp_path, capsys):
+    trace_path = tmp_path / "opus.json"
+    trace_path.write_text(frontier_auth_fix().model_dump_json(), encoding="utf-8")
+    store = str(tmp_path / "s")
+    main(["--store", store, "capture", str(trace_path)])
+    capsys.readouterr()
+
+    assert main(["--store", store, "pack", "--task", "fix login redirect", "--format", "dpo"]) == 0
+    dpo_rows = json.loads(capsys.readouterr().out)
+    assert isinstance(dpo_rows, list) and len(dpo_rows) >= 1
+    assert "chosen" in dpo_rows[0] and "rejected" in dpo_rows[0]
+
+    assert main(["--store", store, "pack", "--task", "fix login redirect", "--format", "json"]) == 0
+    pack_json = json.loads(capsys.readouterr().out)
+    card_id = pack_json["cards"][0]["id"]
+    assert main(["--store", store, "reinforce", card_id, "--success"]) == 0
+    reinforce_out = capsys.readouterr().out
+    assert "Recorded succeeded outcome across 1 card(s)" in reinforce_out

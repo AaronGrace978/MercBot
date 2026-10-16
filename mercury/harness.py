@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from mercury.contrast import contrast_traces
 from mercury.distill import distill_standing_orders, distill_trace
-from mercury.embed import HashingEmbedder
+from mercury.embed import EmbedderProtocol, HashingEmbedder
 from mercury.inject import OperatingPack, build_pack
 from mercury.models import AgentTrace, OperationalCard
 from mercury.store import KnowledgeStore
@@ -22,19 +22,21 @@ class MercuryHarness:
     2. Distill *how it operated* into cards.
     3. Embed those cards in a local store.
     4. At lesser-model session start, inject a Frontier Operating Pack.
+    5. Record student outcomes to reinforce cards that actually helped.
     """
 
     def __init__(
         self,
         path: str | Path = ".mercury",
         *,
+        embedder: EmbedderProtocol | None = None,
         teacher_tiers: tuple[ModelTier, ...] = (ModelTier.FRONTIER,),
         student_tiers: tuple[ModelTier, ...] = (ModelTier.LESSER, ModelTier.CAPABLE),
         allow_student_success: bool = False,
         min_confidence: float = 0.3,
     ) -> None:
         self.store = KnowledgeStore(path)
-        self.embedder = HashingEmbedder()
+        self.embedder: EmbedderProtocol = embedder or HashingEmbedder()
         self.teacher_tiers = teacher_tiers
         self.student_tiers = student_tiers
         self.allow_student_success = allow_student_success
@@ -96,11 +98,28 @@ class MercuryHarness:
         return build_pack(
             self.store,
             task,
+            embedder=self.embedder,
             model=model,
             error_signature=error_signature,
             languages=languages,
             min_confidence=self.min_confidence,
         )
+
+    def record_outcome(
+        self,
+        pack_or_cards: OperatingPack | Iterable[str | OperationalCard],
+        *,
+        succeeded: bool,
+    ) -> int:
+        """Reinforce or decay the cards injected into a student run based on its outcome."""
+        if isinstance(pack_or_cards, OperatingPack):
+            ids = pack_or_cards.card_ids
+        else:
+            ids = [
+                item.id if isinstance(item, OperationalCard) else str(item)
+                for item in pack_or_cards
+            ]
+        return self.store.record_outcome(ids, succeeded=succeeded)
 
     def distill_all(self) -> int:
         cards: list[OperationalCard] = []
@@ -117,6 +136,12 @@ class MercuryHarness:
 
     def close(self) -> None:
         self.store.close()
+
+    def __enter__(self) -> "MercuryHarness":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
 
     def _should_teach(self, trace: AgentTrace, *, force_teacher: bool = False) -> bool:
         if force_teacher:
