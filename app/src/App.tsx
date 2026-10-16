@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  buildFromTemplate,
   compileOperatingPack,
   fetchMercuryState,
   reinforceCards,
@@ -8,6 +9,8 @@ import {
 } from "./api";
 import {
   AgentTrace,
+  AppTemplate,
+  BuiltAppArtifact,
   ContrastResponse,
   FrontierModelSpec,
   MercuryState,
@@ -33,9 +36,21 @@ export default function App() {
   const [state, setState] = useState<MercuryState | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string>("all");
   const [selectedModelId, setSelectedModelId] = useState<string>("gemini-4-argon-high");
-  const [activeTab, setActiveTab] = useState<"runtime" | "deck" | "pack" | "moshpit">("runtime");
+  const [activeTab, setActiveTab] = useState<
+    "runtime" | "forge" | "deck" | "pack" | "moshpit"
+  >("runtime");
   const [scanlines, setScanlines] = useState<boolean>(true);
   const [showKeyVault, setShowKeyVault] = useState<boolean>(false);
+
+  // App Forge / Build Templates state
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("acid-synth-web");
+  const [forgeProjectName, setForgeProjectName] = useState<string>("Acid Pulse 303");
+  const [forgeCustomPrompt, setForgeCustomPrompt] = useState<string>(
+    "Wire TB-303 resonance filter modulation, acid neon UI, and automated smoke tests."
+  );
+  const [isForging, setIsForging] = useState<boolean>(false);
+  const [forgedApp, setForgedApp] = useState<BuiltAppArtifact | null>(null);
+  const [selectedForgedFile, setSelectedForgedFile] = useState<string>("");
 
   // Runtime state
   const [taskInput, setTaskInput] = useState<string>(MISSION_PRESETS[0].task);
@@ -207,6 +222,48 @@ export default function App() {
     }
   }
 
+  const activeTemplate: AppTemplate | undefined = useMemo(() => {
+    const list = state?.templates || [];
+    return list.find((t) => t.id === selectedTemplateId) || list[0];
+  }, [state, selectedTemplateId]);
+
+  async function handleForgeApplication() {
+    if (isForging) return;
+    setIsForging(true);
+    setStatusBanner(
+      `FORGING APPLICATION // TEMPLATE '${selectedTemplateId.toUpperCase()}' WITH ${selectedModelId.toUpperCase()} ...`
+    );
+    try {
+      const res = await buildFromTemplate({
+        template_id: selectedTemplateId,
+        project_name: forgeProjectName,
+        custom_prompt: forgeCustomPrompt,
+        model: selectedModelId,
+      });
+      setState(res.state);
+      setForgedApp(res.build);
+      const firstFile = res.build.files_written[0] || "";
+      setSelectedForgedFile(firstFile);
+      const enriched =
+        res.state.traces.find((t) => t.id === res.trace.id) || {
+          ...res.trace,
+          grade: res.grade,
+          phases: [],
+        };
+      setActiveTrace(enriched);
+      setStatusBanner(
+        `APPLICATION FORGED // ${res.build.project_name.toUpperCase()} -> ${
+          res.build.output_dir
+        } (${res.build.verification_passed ? "VERIFIED PASS" : "CHECK OUTPUT"})`
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusBanner(`FORGE ERROR // ${msg}`);
+    } finally {
+      setIsForging(false);
+    }
+  }
+
   useEffect(() => {
     if (activeTab === "pack" && !compiledPack) {
       handleCompilePack();
@@ -232,7 +289,7 @@ export default function App() {
               alt="MercBot Acid Brain Emblem"
               className="brain-emblem"
             />
-            <div className="brain-tag">ACID CORE v0.1</div>
+            <div className="brain-tag">ACID CORE v0.2</div>
           </div>
 
           <div className="header-copy">
@@ -306,22 +363,28 @@ export default function App() {
               01 // AGENT RUNTIME STAGE
             </button>
             <button
+              className={`rack-tab ${activeTab === "forge" ? "active" : ""}`}
+              onClick={() => setActiveTab("forge")}
+            >
+              02 // APP FORGE & TEMPLATES ({state?.templates?.length ?? 5})
+            </button>
+            <button
               className={`rack-tab ${activeTab === "deck" ? "active" : ""}`}
               onClick={() => setActiveTab("deck")}
             >
-              02 // DISTILLED CORTEX DECK ({state?.stats.cards ?? 0})
+              03 // DISTILLED CORTEX DECK ({state?.stats.cards ?? 0})
             </button>
             <button
               className={`rack-tab ${activeTab === "moshpit" ? "active" : ""}`}
               onClick={() => setActiveTab("moshpit")}
             >
-              03 // CONTRAST MOSH PIT
+              04 // CONTRAST MOSH PIT
             </button>
             <button
               className={`rack-tab ${activeTab === "pack" ? "active" : ""}`}
               onClick={() => setActiveTab("pack")}
             >
-              04 // OPERATING PACK COMPILER
+              05 // OPERATING PACK COMPILER
             </button>
           </div>
 
@@ -1048,6 +1111,318 @@ export default function App() {
                       ? JSON.stringify(compiledPack.dpo, null, 2)
                       : JSON.stringify(compiledPack.sft, null, 2)}
                   </pre>
+                )}
+              </section>
+            )}
+
+            {/* ── TAB 02: APP FORGE & BUILD TEMPLATES ────────────────────── */}
+            {activeTab === "forge" && (
+              <section className="zine-panel">
+                <div className="panel-header">
+                  <div className="panel-title">
+                    <span className="slash">//</span> MERCBOT APPLICATION FORGE & BUILD TEMPLATES
+                  </div>
+                  <span
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      fontSize: "11px",
+                      color: "#39ff14",
+                    }}
+                  >
+                    SCAFFOLDS REAL MULTI-FILE APPS + RUNS AUTOMATED VERIFICATION + DISTILLS CARDS
+                  </span>
+                </div>
+
+                {/* Template Cards Grid */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(255px, 1fr))",
+                    gap: "12px",
+                    marginBottom: "18px",
+                  }}
+                >
+                  {(state?.templates || []).map((tpl) => {
+                    const isSelected = tpl.id === selectedTemplateId;
+                    return (
+                      <div
+                        key={tpl.id}
+                        onClick={() => {
+                          setSelectedTemplateId(tpl.id);
+                          setForgeProjectName(tpl.name);
+                        }}
+                        style={{
+                          cursor: "pointer",
+                          background: isSelected ? "#112818" : "#08120c",
+                          border: `2px solid ${isSelected ? "#39ff14" : "#1f472a"}`,
+                          boxShadow: isSelected ? "4px 4px 0px #ff007f" : "none",
+                          padding: "12px",
+                          transition: "all 0.12s ease",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            marginBottom: "6px",
+                          }}
+                        >
+                          <span className="punk-sticker sticker-acid" style={{ fontSize: "10px" }}>
+                            {tpl.category.toUpperCase()}
+                          </span>
+                          <span
+                            style={{
+                              fontFamily: "var(--font-mono)",
+                              fontSize: "10px",
+                              color: "#9dff00",
+                            }}
+                          >
+                            {tpl.files.length} FILES
+                          </span>
+                        </div>
+                        <div
+                          style={{
+                            fontFamily: "var(--font-display)",
+                            fontSize: "16px",
+                            color: "#eaffea",
+                            marginBottom: "6px",
+                          }}
+                        >
+                          {tpl.name}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: "12px",
+                            color: "#9ec8a8",
+                            marginBottom: "10px",
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          {tpl.tagline}
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                          {tpl.stack.map((tech) => (
+                            <span key={tech} className="specialty-chip">
+                              {tech}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Forge Controls */}
+                <div
+                  className="zine-panel magenta-frame"
+                  style={{ marginBottom: "18px", background: "#09140d" }}
+                >
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 2fr auto",
+                      gap: "12px",
+                      alignItems: "end",
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          fontSize: "11px",
+                          color: "#9dff00",
+                          marginBottom: "4px",
+                        }}
+                      >
+                        PROJECT NAME
+                      </div>
+                      <input
+                        className="punk-input"
+                        value={forgeProjectName}
+                        onChange={(e) => setForgeProjectName(e.target.value)}
+                        placeholder="e.g. Acid Pulse 303"
+                      />
+                    </div>
+                    <div>
+                      <div
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          fontSize: "11px",
+                          color: "#ff007f",
+                          marginBottom: "4px",
+                        }}
+                      >
+                        CUSTOM ARCHITECTURE / FEATURE PROMPT
+                      </div>
+                      <input
+                        className="punk-input"
+                        value={forgeCustomPrompt}
+                        onChange={(e) => setForgeCustomPrompt(e.target.value)}
+                        placeholder="Describe custom features or constraints..."
+                      />
+                    </div>
+                    <button
+                      className="ignite-btn"
+                      style={{ padding: "10px 22px", fontSize: "14px" }}
+                      onClick={handleForgeApplication}
+                      disabled={isForging}
+                    >
+                      {isForging
+                        ? "FORGING APP..."
+                        : `⚡ FORGE WITH ${activeModelSpec?.name || selectedModelId}`}
+                    </button>
+                  </div>
+
+                  {activeTemplate && (
+                    <div
+                      style={{
+                        marginTop: "10px",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "11px",
+                        color: "#8ab896",
+                      }}
+                    >
+                      <span>
+                        TEMPLATE FILES:{" "}
+                        <strong style={{ color: "#39ff14" }}>
+                          {activeTemplate.files.map((f) => f.path).join(", ")}
+                        </strong>
+                      </span>
+                      <span>
+                        VERIFY CMD:{" "}
+                        <code style={{ color: "#f5ff00" }}>{activeTemplate.verify_command}</code>
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Forged App Output Inspector */}
+                {forgedApp ? (
+                  <div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(4, 1fr)",
+                        gap: "10px",
+                        marginBottom: "14px",
+                      }}
+                    >
+                      <div className="vu-card">
+                        <div className="vu-header">
+                          <span>FORGED WORKSPACE</span>
+                          <strong style={{ color: "#39ff14" }}>{forgedApp.project_slug}</strong>
+                        </div>
+                        <div
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            fontSize: "11px",
+                            color: "#eaffea",
+                            wordBreak: "break-all",
+                          }}
+                        >
+                          {forgedApp.output_dir}
+                        </div>
+                      </div>
+
+                      <div className="vu-card">
+                        <div className="vu-header">
+                          <span>VERIFICATION SUITE</span>
+                          <strong
+                            style={{
+                              color: forgedApp.verification_passed ? "#39ff14" : "#ff0055",
+                            }}
+                          >
+                            {forgedApp.verification_passed ? "PASS (100%)" : "FAILED"}
+                          </strong>
+                        </div>
+                        <div
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            fontSize: "11px",
+                            color: "#9dff00",
+                          }}
+                        >
+                          {forgedApp.verification_output}
+                        </div>
+                      </div>
+
+                      <div className="vu-card">
+                        <div className="vu-header">
+                          <span>FILES WRITTEN</span>
+                          <strong style={{ color: "#f5ff00" }}>
+                            {forgedApp.files_written.length}
+                          </strong>
+                        </div>
+                        <div
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            fontSize: "11px",
+                            color: "#eaffea",
+                          }}
+                        >
+                          {forgedApp.files_written.join(", ")}
+                        </div>
+                      </div>
+
+                      <div className="vu-card">
+                        <div className="vu-header">
+                          <span>LAUNCH / RUN HINT</span>
+                          <strong style={{ color: "#ff007f" }}>{forgedApp.model}</strong>
+                        </div>
+                        <div
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            fontSize: "11px",
+                            color: "#39ff14",
+                          }}
+                        >
+                          {forgedApp.run_hint}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* File Tabs + Code Viewer */}
+                    <div className="provider-pills" style={{ marginBottom: "10px" }}>
+                      {forgedApp.files_written.map((relPath) => (
+                        <button
+                          key={relPath}
+                          className={`provider-pill ${
+                            selectedForgedFile === relPath ? "active" : ""
+                          }`}
+                          onClick={() => setSelectedForgedFile(relPath)}
+                        >
+                          {relPath}
+                        </button>
+                      ))}
+                    </div>
+
+                    <pre className="code-preview" style={{ maxHeight: "420px" }}>
+                      {forgedApp.file_contents[selectedForgedFile] ||
+                        "// Select a forged file above to inspect its source code"}
+                    </pre>
+                  </div>
+                ) : (
+                  activeTemplate && (
+                    <div>
+                      <div
+                        style={{
+                          fontFamily: "var(--font-mono)",
+                          fontSize: "12px",
+                          color: "#9dff00",
+                          marginBottom: "8px",
+                        }}
+                      >
+                        TEMPLATE BLUEPRINT PREVIEW // {activeTemplate.name.toUpperCase()} (Click ⚡
+                        FORGE above to scaffold into workspaces/ and run verification tests)
+                      </div>
+                      <pre className="code-preview" style={{ maxHeight: "340px" }}>
+                        {activeTemplate.files[0]?.content}
+                      </pre>
+                    </div>
+                  )
                 )}
               </section>
             )}

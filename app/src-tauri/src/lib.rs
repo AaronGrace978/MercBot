@@ -79,6 +79,11 @@ fn mercury_run(payload: Value) -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn mercury_build(payload: Value) -> Result<Value, String> {
+    call_mercury_bridge("build", &payload)
+}
+
+#[tauri::command]
 fn mercury_contrast(payload: Value) -> Result<Value, String> {
     call_mercury_bridge("contrast", &payload)
 }
@@ -104,6 +109,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             mercury_state,
             mercury_run,
+            mercury_build,
             mercury_contrast,
             mercury_pack,
             mercury_reinforce,

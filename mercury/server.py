@@ -20,6 +20,7 @@ from mercury.providers import (
     list_providers,
 )
 from mercury.runtime import MercuryAgentRuntime
+from mercury.templates import build_app_from_template, list_build_templates
 
 
 class MercuryBridge:
@@ -38,8 +39,9 @@ class MercuryBridge:
             store_path=self.store_path,
             workspace_root=self.workspace_root,
             default_model="gemini-4-argon-high",
-            allow_writes=False,
+            allow_writes=True,
         )
+        self.built_apps: list[dict[str, Any]] = []
         # Ensure initial seed traces exist so the dashboard is immediately alive
         if self.harness.stats()["traces"] == 0:
             self.seed_default_traces()
@@ -100,9 +102,36 @@ class MercuryBridge:
         return {
             "models": [m.model_dump() for m in list_frontier_models()],
             "providers": list_providers(),
+            "templates": [t.model_dump() for t in list_build_templates()],
+            "built_apps": list(self.built_apps),
             "stats": self.harness.stats(),
             "traces": enriched_traces,
             "cards": cards,
+        }
+
+    def build_app(self, payload: dict[str, Any]) -> dict[str, Any]:
+        template_id = str(payload.get("template_id") or "acid-synth-web").strip()
+        project_name = str(payload.get("project_name") or "").strip()
+        custom_prompt = str(payload.get("custom_prompt") or "").strip()
+        model = str(payload.get("model") or "gemini-4-argon-high").strip()
+        output_root = self.workspace_root / "workspaces"
+
+        artifact, trace, grade, cards = build_app_from_template(
+            self.runtime,
+            template_id=template_id,
+            project_name=project_name,
+            custom_prompt=custom_prompt,
+            model=model,
+            output_root=output_root,
+        )
+        art_dict = artifact.as_dict()
+        self.built_apps.insert(0, art_dict)
+        return {
+            "build": art_dict,
+            "trace": trace.model_dump(),
+            "grade": grade.as_dict(),
+            "distilled_cards": [c.model_dump() for c in cards],
+            "state": self.get_state(),
         }
 
     def run_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -216,6 +245,9 @@ def serve_http(
                 models = [m.model_dump() for m in list_frontier_models(provider)]
                 self._send_json(200, {"models": models, "providers": list_providers()})
                 return
+            if parsed.path == "/api/templates":
+                self._send_json(200, {"templates": [t.model_dump() for t in list_build_templates()]})
+                return
             self._send_json(404, {"error": f"Unknown endpoint {parsed.path}"})
 
         def do_POST(self) -> None:  # noqa: N802
@@ -229,6 +261,9 @@ def serve_http(
             try:
                 if self.path == "/api/run":
                     self._send_json(200, bridge.run_agent(payload))
+                    return
+                if self.path == "/api/build":
+                    self._send_json(200, bridge.build_app(payload))
                     return
                 if self.path == "/api/contrast":
                     self._send_json(200, bridge.run_contrast(payload))
@@ -255,6 +290,7 @@ def serve_http(
     lock = threading.Lock()
     orig_get_state = bridge.get_state
     orig_run_agent = bridge.run_agent
+    orig_build_app = bridge.build_app
     orig_run_contrast = bridge.run_contrast
     orig_compile_pack = bridge.compile_pack
     orig_reinforce_card = bridge.reinforce_card
@@ -262,6 +298,7 @@ def serve_http(
 
     bridge.get_state = lambda: _with_lock(lock, orig_get_state)  # type: ignore[method-assign]
     bridge.run_agent = lambda p: _with_lock(lock, orig_run_agent, p)  # type: ignore[method-assign]
+    bridge.build_app = lambda p: _with_lock(lock, orig_build_app, p)  # type: ignore[method-assign]
     bridge.run_contrast = lambda p: _with_lock(lock, orig_run_contrast, p)  # type: ignore[method-assign]
     bridge.compile_pack = lambda p: _with_lock(lock, orig_compile_pack, p)  # type: ignore[method-assign]
     bridge.reinforce_card = lambda p: _with_lock(lock, orig_reinforce_card, p)  # type: ignore[method-assign]

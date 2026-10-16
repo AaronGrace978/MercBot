@@ -9,9 +9,9 @@
 
 ## Live Acid-Punk Tauri v2 Interface
 
-| 01 // Agent Runtime Stage | 02 // Distilled Cortex Deck & Ollama Cloud Roster |
-|---|---|
-| ![MercBot Runtime Stage](docs/mercbot-runtime-stage.png) | ![MercBot Cortex Deck](docs/mercbot-cortex-deck.png) |
+| 01 // Agent Runtime Stage | 02 // App Forge & Build Templates | 03 // Distilled Cortex Deck & Ollama Cloud |
+|---|---|---|
+| ![MercBot Runtime Stage](docs/mercbot-runtime-stage.png) | ![MercBot App Forge](docs/mercbot-app-forge.png) | ![MercBot Cortex Deck](docs/mercbot-cortex-deck.png) |
 
 ---
 
@@ -22,11 +22,44 @@
    - Only verified `ModelTier.FRONTIER` teacher models are listed and permitted to execute trajectories in the runtime.
 2. **Google Gemini 4 Argon + Ollama Cloud Flagships First-Class**
    - Native multi-turn tool-calling adapters for **Google Gemini** (`gemini-4-argon-high`, `gemini-4-argon`, `gemini-3.1-pro` with `thoughtSignature` preservation) and **Ollama Cloud** (`deepseek-v4-pro:cloud`, `kimi-k3:cloud`, `kimi-k2.7-code:cloud`, `glm-5.3:cloud`, `minimax-m3:cloud`, `qwen3.5:397b-cloud`, `qwen3-coder:480b-cloud`, `gpt-oss:120b-cloud`, `mistral-large-4:cloud`, `mistral-large-3:cloud`, `nemotron-3-ultra:cloud`).
-3. **The Mercury Operational Flywheel**
-   - **Capture** live or synthesized frontier agent runs (`grep` → `read` → `shell` reproduce → `search_replace` patch → `shell` verify).
+3. **Application Forge & Build Templates (`mercury templates` / `mercury build`)**
+   - MercBot can **scaffold, customize, and verify real multi-file applications** into `workspaces/<project-slug>/` using `write_file`, `list_dir`, `search_replace`, and `shell` tools.
+   - Includes **5 built-in Application Templates** with automated Python verification suites:
+     - `acid-synth-web` — **Acid-Punk 303 Web Synth & Step Sequencer** (`HTML5`, `WebAudio API`, `Canvas`, `JavaScript`)
+     - `neon-vault-api` — **Neon Vault REST Service & SQLite Engine** (`Python 3.10+`, `SQLite3`, `HTTP Server`, `Unit Tests`)
+     - `tauri-punk-starter` — **Tauri v2 Punk Desktop App Starter** (`Tauri v2`, `Rust`, `TypeScript`, `HTML/CSS`)
+     - `frontier-agent-cli` — **Autonomous Frontier CLI Agent (Argon + Ollama Cloud)** (`Python 3.10+`, `Gemini REST`, `Ollama Cloud REST`)
+     - `cyber-kanban-board` — **Cyber-Zine Kanban & Incident Command Board** (`HTML5`, `CSS Grid`, `Vanilla JS`)
+   - Every forged application runs its verification test suite automatically, grades the build trajectory (100% policy + competence), and distills `FEATURE` operational cards into `.mercury`.
+4. **The Mercury Operational Flywheel**
+   - **Capture** live or synthesized frontier agent runs (`grep` → `read` → `shell` reproduce → `search_replace` / `write_file` → `shell` verify).
    - **Mid-Run Recovery Injection**: When a tool call comes back red during a run, `MercuryAgentRuntime` queries the `.mercury` hybrid store (character n-gram hashing + BM25 + RRF) with the error signature and injects recovery cards on the fly.
    - **Distill** operational cards: `PLAYBOOK`, `DECISION` (`✓ CHOSE` vs `✗ REJECTED`), `CONTRAST`, `RECOVERY`, `TOOL_POLICY`, `STANDING_ORDER`, `HEURISTIC`, and `ANTI_PATTERN`.
    - **Deterministic Behavior Grader (No LLM Judge)**: Every run is scored on a **Policy Floor** (`explored_first`, `read_before_edit`, `verified_after_edit`, `no_blind_retry`, `recovered_after_error`, `outcome_recorded`) and a **Competence Ceiling** (`evidence_depth`, `focused_edits`, `no_edit_thrash`, `phase_completeness`).
+
+---
+
+## Application Forge & Build Templates (`mercury templates` & `mercury build`)
+
+| Template ID | Category | Stack | Verification Suite |
+|---|---|---|---|
+| `acid-synth-web` | Web App / Audio | HTML5, WebAudio API, Canvas, JS | `python verify_app.py` |
+| `neon-vault-api` | Backend / Python API | Python 3.10+, SQLite3, HTTP JSON Server | `python test_service.py` |
+| `tauri-punk-starter` | Desktop / Tauri v2 + Rust | Tauri v2, Rust, TypeScript, HTML/CSS | `python verify_tauri_template.py` |
+| `frontier-agent-cli` | AI Agent / CLI | Python 3.10+, Gemini REST, Ollama Cloud | `python agent_cli.py --self-test` |
+| `cyber-kanban-board` | Web App / Productivity | HTML5, CSS Grid, Vanilla JS | `python verify_kanban.py` |
+
+```bash
+# List all available Application Build Templates
+uv run python -m mercury templates
+
+# Forge & verify a multi-file application from any template with a Frontier model
+uv run python -m mercury build \
+  --template acid-synth-web \
+  --name "Acid Pulse 303" \
+  --prompt "Include high-resonance TB-303 bassline filter and live oscilloscope" \
+  --model gemini-4-argon-high
+```
 
 ---
 
@@ -131,6 +164,16 @@ result = runtime.run(
 print(result.grade.summary())
 print(f"Distilled {len(result.distilled_cards)} operational cards")
 print(result.final_response)
+
+# 3. Forge & verify a multi-file application from a Build Template
+forged = runtime.build_template(
+    "neon-vault-api",
+    project_name="Cyber Vault Service",
+    custom_prompt="Include SQLite CRUD and tag search verification",
+    model="gemini-4-argon-high",
+)
+print("Forged app at:", forged["artifact"]["output_dir"])
+print("Verification:", forged["artifact"]["verification_output"])
 ```
 
 ---

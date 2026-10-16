@@ -1,4 +1,5 @@
 import {
+  BuildAppResponse,
   ContrastResponse,
   MercuryState,
   PackResponse,
@@ -50,6 +51,15 @@ export function runFrontierAgent(params: {
   api_keys?: Record<string, string>;
 }): Promise<RunAgentResponse> {
   return callBackend<RunAgentResponse>("mercury_run", "/api/run", "POST", params);
+}
+
+export function buildFromTemplate(params: {
+  template_id: string;
+  project_name?: string;
+  custom_prompt?: string;
+  model: string;
+}): Promise<BuildAppResponse> {
+  return callBackend<BuildAppResponse>("mercury_build", "/api/build", "POST", params);
 }
 
 export function runContrastSmackdown(teacherModel: string): Promise<ContrastResponse> {

@@ -97,6 +97,35 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_cmd.add_argument("--json", action="store_true", help="Print full run telemetry as JSON")
 
+    templates_cmd = sub.add_parser(
+        "templates",
+        help="List full-stack & agent Application Build Templates available in MercBot App Forge",
+    )
+    templates_cmd.add_argument("--json", action="store_true", help="Print templates as JSON")
+
+    build_cmd = sub.add_parser(
+        "build",
+        help="Scaffold, customize, and verify an application from a MercBot Build Template",
+    )
+    build_cmd.add_argument(
+        "--template",
+        default="acid-synth-web",
+        help="Template ID (e.g. acid-synth-web, neon-vault-api, tauri-punk-starter, frontier-agent-cli, cyber-kanban-board)",
+    )
+    build_cmd.add_argument("--name", default="", help="Custom project name / title")
+    build_cmd.add_argument("--prompt", default="", help="Custom feature / architecture brief")
+    build_cmd.add_argument(
+        "--model",
+        default="gemini-4-argon-high",
+        help="Frontier model ID (default: gemini-4-argon-high)",
+    )
+    build_cmd.add_argument(
+        "--output-dir",
+        default="workspaces",
+        help="Output workspace parent directory (default: workspaces)",
+    )
+    build_cmd.add_argument("--json", action="store_true", help="Print full build artifact as JSON")
+
     serve_cmd = sub.add_parser("serve", help="Start the local MercBot HTTP bridge server")
     serve_cmd.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     serve_cmd.add_argument("--port", type=int, default=8765, help="Bind port (default: 8765)")
@@ -104,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     bridge_cmd = sub.add_parser("bridge", help="Single-shot JSON bridge for Tauri desktop IPC")
     bridge_cmd.add_argument(
         "action",
-        choices=("state", "run", "contrast", "pack", "reinforce", "seed"),
+        choices=("state", "run", "build", "templates", "contrast", "pack", "reinforce", "seed"),
     )
     bridge_cmd.add_argument("--payload", default="{}", help="JSON payload string")
 
@@ -208,6 +237,45 @@ def main(argv: list[str] | None = None) -> int:
             print(result.final_response)
         return 0
 
+    if args.command == "templates":
+        from mercury.templates import list_build_templates
+
+        templates = list_build_templates()
+        if args.json:
+            json.dump([t.model_dump() for t in templates], sys.stdout, indent=2)
+            sys.stdout.write("\n")
+        else:
+            print(f"MERCBOT APPLICATION FORGE TEMPLATES ({len(templates)} templates):")
+            for t in templates:
+                print(f"  - {t.id:<22} | {t.category:<18} | {t.name}")
+                print(f"    Stack: {', '.join(t.stack)} | Run: {t.run_hint}")
+        return 0
+
+    if args.command == "build":
+        from mercury.runtime import MercuryAgentRuntime
+
+        runtime = MercuryAgentRuntime(harness, store_path=args.store)
+        res = runtime.build_template(
+            args.template,
+            project_name=args.name,
+            custom_prompt=args.prompt,
+            model=args.model,
+            output_root=args.output_dir,
+        )
+        if args.json:
+            json.dump(res, sys.stdout, indent=2, default=str)
+            sys.stdout.write("\n")
+        else:
+            art = res["artifact"]
+            print(f"FORGED APPLICATION: {art['project_name']} ({art['template_name']})")
+            print(f"Output Dir : {art['output_dir']}")
+            print(f"Model      : {art['model']} | Trace: {art['trace_id']}")
+            print(f"Files      : {', '.join(art['files_written'])}")
+            print(f"Verified   : {'PASS' if art['verification_passed'] else 'FAIL'}")
+            print(f"Verify Out : {art['verification_output']}")
+            print(f"Run Hint   : {art['run_hint']}")
+        return 0
+
     if args.command == "serve":
         from mercury.server import serve_http
 
@@ -217,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "bridge":
         from mercury.server import MercuryBridge
+        from mercury.templates import list_build_templates
 
         harness.close()
         bridge = MercuryBridge(store_path=args.store)
@@ -225,6 +294,10 @@ def main(argv: list[str] | None = None) -> int:
             out = bridge.get_state()
         elif args.action == "run":
             out = bridge.run_agent(payload)
+        elif args.action == "build":
+            out = bridge.build_app(payload)
+        elif args.action == "templates":
+            out = {"templates": [t.model_dump() for t in list_build_templates()]}
         elif args.action == "contrast":
             out = bridge.run_contrast(payload)
         elif args.action == "pack":

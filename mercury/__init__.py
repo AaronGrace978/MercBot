@@ -13,12 +13,26 @@ from mercury.providers import (
     list_frontier_models,
 )
 from mercury.runtime import AgentRunResult, MercuryAgentRuntime
+from mercury.templates import (
+    APP_TEMPLATES,
+    AppTemplate,
+    BuiltAppArtifact,
+    build_app_from_template,
+    get_build_template,
+    list_build_templates,
+)
 from mercury.tiers import ModelTier, classify_model
 
 __all__ = [
     "MercuryHarness",
     "MercuryAgentRuntime",
     "AgentRunResult",
+    "APP_TEMPLATES",
+    "AppTemplate",
+    "BuiltAppArtifact",
+    "list_build_templates",
+    "get_build_template",
+    "build_app_from_template",
     "FRONTIER_MODELS",
     "FrontierModelSpec",
     "FrontierOnlyError",

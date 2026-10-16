@@ -101,3 +101,36 @@ def test_bridge_state_and_operations(tmp_path):
     )
     assert run_out["run"]["model"]["id"] == "deepseek-v4-pro:cloud"
     assert run_out["run"]["grade"]["score"] >= 0.85
+
+
+def test_app_templates_and_build_forge(tmp_path):
+    from mercury.templates import list_build_templates
+
+    templates = list_build_templates()
+    template_ids = {t.id for t in templates}
+    assert {
+        "acid-synth-web",
+        "neon-vault-api",
+        "tauri-punk-starter",
+        "frontier-agent-cli",
+        "cyber-kanban-board",
+    }.issubset(template_ids)
+
+    store_dir = tmp_path / ".mercury"
+    out_dir = tmp_path / "workspaces"
+    runtime = MercuryAgentRuntime(store_path=store_dir)
+
+    for tpl_id in ("acid-synth-web", "neon-vault-api", "tauri-punk-starter", "frontier-agent-cli", "cyber-kanban-board"):
+        res = runtime.build_template(
+            tpl_id,
+            project_name=f"Test {tpl_id}",
+            custom_prompt="Include full smoke test verification",
+            model="gemini-4-argon-high",
+            output_root=out_dir,
+        )
+        art = res["artifact"]
+        assert art["verification_passed"] is True, f"Template {tpl_id} failed verification: {art['verification_output']}"
+        assert len(art["files_written"]) >= 1
+        assert res["grade"]["score"] >= 0.85
+        assert len(res["distilled_cards"]) >= 4
+

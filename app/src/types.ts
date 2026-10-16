@@ -124,12 +124,57 @@ export interface StoreStats {
   by_kind: Record<string, number>;
 }
 
+export interface AppTemplateFile {
+  path: string;
+  description: string;
+  content: string;
+}
+
+export interface AppTemplate {
+  id: string;
+  name: string;
+  category: string;
+  tagline: string;
+  stack: string[];
+  accent: string;
+  entrypoint: string;
+  verify_command: string;
+  run_hint: string;
+  files: AppTemplateFile[];
+}
+
+export interface BuiltAppArtifact {
+  template_id: string;
+  template_name: string;
+  project_name: string;
+  project_slug: string;
+  output_dir: string;
+  files_written: string[];
+  file_contents: Record<string, string>;
+  verification_passed: boolean;
+  verification_output: string;
+  model: string;
+  trace_id: string;
+  custom_prompt: string;
+  run_hint: string;
+}
+
 export interface MercuryState {
   models: FrontierModelSpec[];
   providers: ProviderInfo[];
+  templates?: AppTemplate[];
+  built_apps?: BuiltAppArtifact[];
   stats: StoreStats;
   traces: AgentTrace[];
   cards: OperationalCard[];
+}
+
+export interface BuildAppResponse {
+  build: BuiltAppArtifact;
+  trace: AgentTrace;
+  grade: BehaviorGrade;
+  distilled_cards: OperationalCard[];
+  state: MercuryState;
 }
 
 export interface RunAgentResponse {

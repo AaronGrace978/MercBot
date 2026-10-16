@@ -75,6 +75,16 @@ RUNTIME_TOOLS_SCHEMA: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "list_dir",
+        "description": "List files and directories inside a workspace directory.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Directory path relative to workspace root (default '.')"},
+            },
+        },
+    },
+    {
         "name": "read",
         "description": "Read contents of a file from the workspace to localize the fault site.",
         "parameters": {
@@ -88,8 +98,20 @@ RUNTIME_TOOLS_SCHEMA: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "write_file",
+        "description": "Create a new file or overwrite an existing file with complete contents (automatically creates parent directories). Use this to scaffold and build new applications, modules, HTML/CSS/JS/Python/Rust files, or tests.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path to create or overwrite relative to workspace root"},
+                "content": {"type": "string", "description": "Full text contents to write to the file"},
+            },
+            "required": ["path", "content"],
+        },
+    },
+    {
         "name": "search_replace",
-        "description": "Perform a focused exact string replacement in a file after reading it.",
+        "description": "Perform a focused exact string replacement in an existing file after reading it.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -102,11 +124,11 @@ RUNTIME_TOOLS_SCHEMA: list[dict[str, Any]] = [
     },
     {
         "name": "shell",
-        "description": "Execute a verification test or command in the workspace.",
+        "description": "Execute a build, test, or verification command in the workspace.",
         "parameters": {
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Command to execute (e.g. pytest -q)"},
+                "command": {"type": "string", "description": "Command to execute (e.g. pytest -q, python app.py, npm run build)"},
             },
             "required": ["command"],
         },
@@ -130,8 +152,12 @@ class WorkspaceToolbox:
                 return self._tool_grep(args)
             if name in ("glob", "find"):
                 return self._tool_glob(args)
+            if name in ("list_dir", "listdir", "ls"):
+                return self._tool_list_dir(args)
             if name in ("read", "read_file", "open"):
                 return self._tool_read(args)
+            if name in ("write_file", "write", "create_file"):
+                return self._tool_write_file(args)
             if name in ("search_replace", "str_replace", "edit"):
                 return self._tool_search_replace(args)
             if name in ("shell", "bash", "pytest", "run_terminal_cmd"):
@@ -202,6 +228,33 @@ class WorkspaceToolbox:
                 matched.append(rel_str)
         return ("\n".join(matched[:60]) if matched else f"No files matched `{pattern}`"), False
 
+    def _tool_list_dir(self, args: dict[str, Any]) -> tuple[str, bool]:
+        rel = str(args.get("path") or ".").strip() or "."
+        target = self._resolve_safe(rel)
+        if not target.exists():
+            return f"Directory `{rel}` does not exist yet", False
+        if not target.is_dir():
+            return f"`{rel}` is a file, not a directory", True
+        entries: list[str] = []
+        for item in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            if item.name in {".git", ".mercury", "node_modules", "__pycache__", "target"}:
+                continue
+            suffix = "/" if item.is_dir() else f" ({item.stat().st_size} B)"
+            entries.append(f"{item.name}{suffix}")
+        return ("\n".join(entries[:100]) if entries else "(empty directory)"), False
+
+    def _tool_write_file(self, args: dict[str, Any]) -> tuple[str, bool]:
+        rel = str(args.get("path") or args.get("file") or args.get("file_path") or "").strip()
+        content = str(args.get("content") if args.get("content") is not None else args.get("contents") or "")
+        if not rel:
+            return "Error: `path` is required for write_file", True
+        if not self.allow_writes:
+            return f"[sandbox] verified write_file target `{rel}` ({len(content)} bytes)", False
+        fpath = self._resolve_safe(rel)
+        fpath.parent.mkdir(parents=True, exist_ok=True)
+        fpath.write_text(content, encoding="utf-8")
+        return f"Wrote `{rel}` ({len(content)} bytes, {len(content.splitlines())} lines)", False
+
     def _tool_read(self, args: dict[str, Any]) -> tuple[str, bool]:
         rel = str(args.get("path") or args.get("file") or "")
         if not rel:
@@ -251,7 +304,7 @@ class WorkspaceToolbox:
                 timeout=20,
             )
             output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
-            is_err = proc.returncode != 0 or looks_like_error(output)
+            is_err = proc.returncode != 0
             return (output[:2500] or f"Command exited with code {proc.returncode}"), is_err
         except Exception as exc:
             return f"ShellExecutionError: {exc}", True
@@ -314,7 +367,7 @@ class MercuryAgentRuntime:
         store_path: str | Path = ".mercury",
         workspace_root: str | Path = ".",
         default_model: str = "gemini-4-argon-high",
-        allow_writes: bool = False,
+        allow_writes: bool = True,
     ) -> None:
         # Validate default_model is strictly frontier at init time
         self.default_model_spec = get_frontier_model(default_model)
@@ -326,13 +379,42 @@ class MercuryAgentRuntime:
         """List strictly frontier models available to the runtime."""
         return list_frontier_models(provider)
 
+    def build_template(
+        self,
+        template_id: str,
+        *,
+        project_name: str = "",
+        custom_prompt: str = "",
+        model: str | None = None,
+        output_root: str | Path = "workspaces",
+    ) -> dict[str, Any]:
+        """Scaffold, customize, and verify an application from a build template."""
+        from mercury.templates import build_app_from_template
+
+        target_model = model or self.default_model_spec.id
+        artifact, trace, grade, cards = build_app_from_template(
+            self,
+            template_id=template_id,
+            project_name=project_name,
+            custom_prompt=custom_prompt,
+            model=target_model,
+            output_root=output_root,
+        )
+        return {
+            "artifact": artifact.as_dict(),
+            "trace": trace.model_dump(),
+            "grade": grade.as_dict(),
+            "distilled_cards": [c.model_dump() for c in cards],
+        }
+
     def run(
         self,
         task: str,
         *,
         model: str | None = None,
         mode: str = "auto",
-        max_steps: int = 6,
+        max_steps: int = 12,
+        workspace_root: str | Path | None = None,
         api_keys: dict[str, str] | None = None,
         inject_pack: bool = True,
         auto_capture: bool = True,
@@ -340,6 +422,11 @@ class MercuryAgentRuntime:
     ) -> AgentRunResult:
         """Execute a frontier agent run on `task` and feed the trace into the Mercury flywheel."""
         start_ts = time.perf_counter()
+        if workspace_root is not None:
+            resolved_ws = Path(workspace_root).resolve()
+            resolved_ws.mkdir(parents=True, exist_ok=True)
+            self.workspace_root = resolved_ws
+            self.toolbox = WorkspaceToolbox(self.workspace_root, allow_writes=self.toolbox.allow_writes)
         target_model = model or self.default_model_spec.id
         # Gate: strictly FRONTIER models only
         spec = get_frontier_model(target_model)
@@ -427,11 +514,13 @@ class MercuryAgentRuntime:
     ) -> tuple[AgentTrace, str, list[str]]:
         system_prompt = (
             f"You are {spec.name} ({spec.id}), a frontier coding agent operating inside the "
-            "Mercury Harness runtime. Always follow frontier operating discipline:\n"
-            "1. Explore first with `grep` or `glob` before opening or editing files.\n"
-            "2. Localize by reading the implicated file and test with `read`.\n"
-            "3. Make focused edits with `search_replace`.\n"
-            "4. Verify after editing with `shell`.\n"
+            f"Mercury Harness runtime (workspace root: `{self.workspace_root.as_posix()}`). "
+            "You can build full applications, scaffold multi-file projects, fix bugs, and run tests. "
+            "Always follow frontier operating discipline:\n"
+            "1. Explore first with `list_dir`, `glob`, or `grep` before reading or writing files.\n"
+            "2. Localize by reading existing files or checking target paths with `read`.\n"
+            "3. Build/scaffold new files with `write_file` or patch existing files with `search_replace`.\n"
+            "4. Verify after creating or editing files by running a real command or test with `shell`.\n"
             "5. If a tool fails, change approach — never repeat the identical call unchanged."
         )
         if pack and pack.cards:
