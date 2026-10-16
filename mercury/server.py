@@ -20,7 +20,13 @@ from mercury.providers import (
     list_providers,
 )
 from mercury.runtime import MercuryAgentRuntime
-from mercury.templates import build_app_from_template, list_build_templates
+from mercury.templates import (
+    build_app_from_template,
+    infer_template_from_prompt,
+    launch_built_app,
+    list_build_templates,
+    list_built_apps,
+)
 
 
 class MercuryBridge:
@@ -103,18 +109,25 @@ class MercuryBridge:
             "models": [m.model_dump() for m in list_frontier_models()],
             "providers": list_providers(),
             "templates": [t.model_dump() for t in list_build_templates()],
-            "built_apps": list(self.built_apps),
+            "built_apps": list_built_apps(self.workspace_root / "workspaces"),
             "stats": self.harness.stats(),
             "traces": enriched_traces,
             "cards": cards,
         }
 
     def build_app(self, payload: dict[str, Any]) -> dict[str, Any]:
-        template_id = str(payload.get("template_id") or "acid-synth-web").strip()
+        template_id = str(payload.get("template_id") or "auto").strip()
         project_name = str(payload.get("project_name") or "").strip()
         custom_prompt = str(payload.get("custom_prompt") or "").strip()
         model = str(payload.get("model") or "gemini-4-argon-high").strip()
+        auto_launch = bool(payload.get("launch", False))
         output_root = self.workspace_root / "workspaces"
+
+        if template_id in ("auto", "prompt", "freeform", ""):
+            inferred_tpl, inferred_title = infer_template_from_prompt(custom_prompt or project_name or "Custom App")
+            template_id = inferred_tpl
+            if not project_name:
+                project_name = inferred_title
 
         artifact, trace, grade, cards = build_app_from_template(
             self.runtime,
@@ -125,12 +138,37 @@ class MercuryBridge:
             output_root=output_root,
         )
         art_dict = artifact.as_dict()
-        self.built_apps.insert(0, art_dict)
+        launch_info = None
+        if auto_launch:
+            try:
+                launch_info = launch_built_app(
+                    artifact.project_slug,
+                    target="window",
+                    output_root=output_root,
+                )
+            except Exception as exc:
+                launch_info = {"launched": False, "error": str(exc)}
         return {
             "build": art_dict,
+            "launch": launch_info,
             "trace": trace.model_dump(),
             "grade": grade.as_dict(),
             "distilled_cards": [c.model_dump() for c in cards],
+            "state": self.get_state(),
+        }
+
+    def launch_app(self, payload: dict[str, Any]) -> dict[str, Any]:
+        slug = str(payload.get("project_slug") or payload.get("slug") or "").strip()
+        target = str(payload.get("target") or "window").strip()
+        output_root = self.workspace_root / "workspaces"
+        if not slug:
+            existing = list_built_apps(output_root)
+            if not existing:
+                raise ValueError("No forged applications found in workspaces/. Build an app first!")
+            slug = str(existing[0]["project_slug"])
+        info = launch_built_app(slug, target=target, output_root=output_root)
+        return {
+            "launch": info,
             "state": self.get_state(),
         }
 
@@ -265,6 +303,9 @@ def serve_http(
                 if self.path == "/api/build":
                     self._send_json(200, bridge.build_app(payload))
                     return
+                if self.path == "/api/launch":
+                    self._send_json(200, bridge.launch_app(payload))
+                    return
                 if self.path == "/api/contrast":
                     self._send_json(200, bridge.run_contrast(payload))
                     return
@@ -287,10 +328,11 @@ def serve_http(
             return
 
     server = ThreadingHTTPServer((host, port), Handler)
-    lock = threading.Lock()
+    lock = threading.RLock()
     orig_get_state = bridge.get_state
     orig_run_agent = bridge.run_agent
     orig_build_app = bridge.build_app
+    orig_launch_app = bridge.launch_app
     orig_run_contrast = bridge.run_contrast
     orig_compile_pack = bridge.compile_pack
     orig_reinforce_card = bridge.reinforce_card
@@ -299,6 +341,7 @@ def serve_http(
     bridge.get_state = lambda: _with_lock(lock, orig_get_state)  # type: ignore[method-assign]
     bridge.run_agent = lambda p: _with_lock(lock, orig_run_agent, p)  # type: ignore[method-assign]
     bridge.build_app = lambda p: _with_lock(lock, orig_build_app, p)  # type: ignore[method-assign]
+    bridge.launch_app = lambda p: _with_lock(lock, orig_launch_app, p)  # type: ignore[method-assign]
     bridge.run_contrast = lambda p: _with_lock(lock, orig_run_contrast, p)  # type: ignore[method-assign]
     bridge.compile_pack = lambda p: _with_lock(lock, orig_compile_pack, p)  # type: ignore[method-assign]
     bridge.reinforce_card = lambda p: _with_lock(lock, orig_reinforce_card, p)  # type: ignore[method-assign]

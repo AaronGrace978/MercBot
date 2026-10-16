@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # ============================================================
-#  Mercury Harness — product launcher
+#  MercBot // Mercury Harness — product launcher
 # ------------------------------------------------------------
 #   ./mercury.sh            interactive menu
+#   ./mercury.sh build      build & verify an app from prompt/template
+#   ./mercury.sh launch     launch a built app from workspaces/
+#   ./mercury.sh templates  list application build templates
+#   ./mercury.sh run        run the Frontier Agent Runtime on a task
+#   ./mercury.sh models     list Frontier models (Gemini Argon, Ollama Cloud)
+#   ./mercury.sh serve      start the MercBot HTTP bridge server
 #   ./mercury.sh demo       frontier -> lesser flywheel demo
 #   ./mercury.sh status     knowledge-store stats
 #   ./mercury.sh pack --task "Fix the redirect bug"
@@ -88,21 +94,27 @@ Mercury Harness — launcher
 Usage: ./mercury.sh [command] [args...]
 
 Product commands:
-  demo                 Run the built-in frontier -> lesser flywheel demo
-  status               Show knowledge-store statistics
-  pack --task "..."    Print a Frontier Operating Pack for a lesser-model task
-  capture <trace.json> Ingest a frontier/other agent trace
-  contrast <s> <t>     Distill divergence: failed student vs successful teacher
-  grade <trace.json>   Deterministically grade how a trace operated
-  distill              Re-distill every stored trace into operational cards
-  init                 Create an empty knowledge store
+  build --prompt "..."   Forge, verify, and optionally --launch an application
+  launch [app-slug]      Launch a forged application in a window (or --folder)
+  templates              List Application Forge build templates
+  run --task "..."       Run the Frontier Agent Runtime (Gemini 4 Argon / Ollama Cloud)
+  models                 List strictly-frontier teacher models
+  serve                  Start the local MercBot HTTP bridge server (port 8765)
+  demo                   Run the built-in frontier -> lesser flywheel demo
+  status                 Show knowledge-store statistics
+  pack --task "..."      Print a Frontier Operating Pack for a lesser-model task
+  capture <trace.json>   Ingest a frontier/other agent trace
+  contrast <s> <t>       Distill divergence: failed student vs successful teacher
+  grade <trace.json>     Deterministically grade how a trace operated
+  distill                Re-distill every stored trace into operational cards
+  init                   Create an empty knowledge store
 
 Launcher commands:
-  test                 Run the pytest suite
-  doctor               Environment check
-  version              Print installed version
-  shell                Python REPL with mercury importable
-  help                 This screen
+  test                   Run the pytest suite
+  doctor                 Environment check
+  version                Print installed version
+  shell                  Python REPL with mercury importable
+  help                   This screen
 
 With no command, an interactive menu opens.
 EOF
@@ -112,24 +124,42 @@ menu() {
   banner
   echo "What do you want to launch?"
   echo
-  echo "  1) demo     frontier -> lesser flywheel on fixture traces"
-  echo "  2) status   knowledge-store statistics"
-  echo "  3) pack     print a Frontier Operating Pack for a task"
-  echo "  4) capture  ingest a trace JSON file"
-  echo "  5) test     run the pytest suite"
-  echo "  6) doctor   environment check"
+  echo "  1) build      tell MercBot what to build (and launch it!)"
+  echo "  2) launch     launch a built application from workspaces/"
+  echo "  3) templates  list ready-to-build application templates"
+  echo "  4) run        run the Frontier Agent Runtime on a mission"
+  echo "  5) models     list Frontier models (Gemini 4 Argon, Ollama Cloud)"
+  echo "  6) demo       frontier -> lesser flywheel on fixture traces"
+  echo "  7) status     knowledge-store statistics"
+  echo "  8) pack       print a Frontier Operating Pack for a task"
+  echo "  9) test       run the pytest suite"
+  echo "  0) doctor     environment check"
   echo "  q) quit"
   echo
   read -r -p "> " choice
   case "$choice" in
-    1|demo)    cmd_demo ;;
-    2|status)  cmd_status ;;
-    3|pack)    read -r -p "Task description: " task; run_mercury pack --task "$task" ;;
-    4|capture) read -r -p "Path to trace JSON: " trace; run_mercury capture "$trace" ;;
-    5|test)    cmd_test ;;
-    6|doctor)  cmd_doctor ;;
-    q|quit|"") ok "later." ;;
-    *) err "unknown choice: $choice"; exit 2 ;;
+    1|build)
+      read -r -p "What should MercBot build? (e.g. 'Acid 303 synth' or 'Cyber Kanban'): " prompt
+      read -r -p "Project name (optional): " pname
+      run_mercury build --template auto --name "$pname" --prompt "$prompt" --launch
+      ;;
+    2|launch)
+      read -r -p "App slug in workspaces/ (leave blank for latest): " slug
+      run_mercury launch $slug
+      ;;
+    3|templates) run_mercury templates ;;
+    4|run)
+      read -r -p "Mission / task for Frontier Agent: " task
+      run_mercury run --task "$task"
+      ;;
+    5|models)    run_mercury models ;;
+    6|demo)      cmd_demo ;;
+    7|status)    cmd_status ;;
+    8|pack)      read -r -p "Task description: " task; run_mercury pack --task "$task" ;;
+    9|test)      cmd_test ;;
+    0|doctor)    cmd_doctor ;;
+    q|quit|"")   ok "later." ;;
+    *)           err "unknown choice: $choice"; exit 2 ;;
   esac
 }
 

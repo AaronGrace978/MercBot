@@ -104,7 +104,7 @@ def test_bridge_state_and_operations(tmp_path):
 
 
 def test_app_templates_and_build_forge(tmp_path):
-    from mercury.templates import list_build_templates
+    from mercury.templates import infer_template_from_prompt, list_build_templates, list_built_apps
 
     templates = list_build_templates()
     template_ids = {t.id for t in templates}
@@ -114,13 +114,25 @@ def test_app_templates_and_build_forge(tmp_path):
         "tauri-punk-starter",
         "frontier-agent-cli",
         "cyber-kanban-board",
+        "custom-prompt-app",
     }.issubset(template_ids)
+
+    assert infer_template_from_prompt("Build a 303 acid bassline synth")[0] == "acid-synth-web"
+    assert infer_template_from_prompt("Create a cyberpunk kanban board")[0] == "cyber-kanban-board"
+    assert infer_template_from_prompt("Build a custom telemetry matrix")[0] == "custom-prompt-app"
 
     store_dir = tmp_path / ".mercury"
     out_dir = tmp_path / "workspaces"
-    runtime = MercuryAgentRuntime(store_path=store_dir)
+    runtime = MercuryAgentRuntime(store_path=store_dir, workspace_root=tmp_path)
 
-    for tpl_id in ("acid-synth-web", "neon-vault-api", "tauri-punk-starter", "frontier-agent-cli", "cyber-kanban-board"):
+    for tpl_id in (
+        "acid-synth-web",
+        "neon-vault-api",
+        "tauri-punk-starter",
+        "frontier-agent-cli",
+        "cyber-kanban-board",
+        "custom-prompt-app",
+    ):
         res = runtime.build_template(
             tpl_id,
             project_name=f"Test {tpl_id}",
@@ -131,6 +143,21 @@ def test_app_templates_and_build_forge(tmp_path):
         art = res["artifact"]
         assert art["verification_passed"] is True, f"Template {tpl_id} failed verification: {art['verification_output']}"
         assert len(art["files_written"]) >= 1
+        assert len(art["preview_html"]) > 200
         assert res["grade"]["score"] >= 0.85
         assert len(res["distilled_cards"]) >= 4
+
+    # Freeform build prompt through runtime.run() should auto-forge and attach built_app
+    run_res = runtime.run(
+        "Build a custom neural telemetry studio with live matrix nodes",
+        model="gemini-4-argon-high",
+        mode="synth",
+    )
+    assert run_res.built_app is not None
+    assert run_res.built_app["verify_passed"] is True
+    assert len(run_res.built_app["preview_html"]) > 200
+
+    persisted = list_built_apps(out_dir)
+    assert len(persisted) >= 7
+
 

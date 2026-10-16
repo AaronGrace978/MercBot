@@ -922,3 +922,121 @@ body {
   max-height: 520px;
   overflow-y: auto;
 }
+
+/* ── APP FORGE & LIVE LAUNCHER STAGE ───────────────────────────────────── */
+.punk-btn.acid-launch {
+  background: var(--acid-green);
+  color: #050c07;
+  border-color: var(--bio-magenta);
+  font-family: var(--font-stencil);
+  font-size: 14px;
+  padding: 11px 20px;
+  box-shadow: 4px 4px 0px var(--bio-magenta);
+}
+
+.punk-btn.acid-launch:hover:not(:disabled) {
+  background: var(--hazard-yellow);
+  color: #050c07;
+  border-color: #050c07;
+  box-shadow: 5px 5px 0px var(--bio-magenta);
+}
+
+.punk-btn.yellow-volt {
+  background: var(--hazard-yellow);
+  color: #050c07;
+  border-color: #050c07;
+  font-family: var(--font-stencil);
+  font-size: 13px;
+  padding: 10px 18px;
+  box-shadow: 4px 4px 0px var(--bio-magenta);
+}
+
+.punk-btn.yellow-volt:hover:not(:disabled) {
+  background: var(--acid-green);
+  color: #050c07;
+  border-color: var(--bio-magenta);
+}
+
+.forge-template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.forge-template-card {
+  background: var(--bg-card);
+  border: 2px solid var(--border-dark);
+  padding: 14px;
+  cursor: pointer;
+  transition: all 0.14s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.forge-template-card:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--acid-green);
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0px var(--bio-magenta);
+}
+
+.forge-template-card.selected {
+  background: linear-gradient(135deg, rgba(57, 255, 20, 0.16) 0%, rgba(255, 0, 127, 0.16) 100%);
+  border-color: var(--acid-green);
+  box-shadow: 4px 4px 0px var(--bio-magenta);
+}
+
+.built-apps-shelf {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.built-app-card {
+  background: #06110a;
+  border: 2px solid var(--border-dark);
+  border-left: 5px solid var(--acid-green);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.built-app-card.active {
+  border-color: var(--acid-green);
+  box-shadow: 4px 4px 0px var(--bio-magenta);
+  background: rgba(57, 255, 20, 0.08);
+}
+
+.live-stage-frame {
+  background: #030704;
+  border: 3px solid var(--acid-green);
+  box-shadow: 6px 6px 0px var(--bio-magenta);
+  margin-top: 14px;
+  overflow: hidden;
+}
+
+.live-stage-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #08160d;
+  border-bottom: 2px solid var(--acid-green);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.live-stage-iframe {
+  width: 100%;
+  height: 500px;
+  border: none;
+  background: #050c07;
+  display: block;
+}
+

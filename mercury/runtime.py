@@ -323,6 +323,7 @@ class AgentRunResult:
     mode_used: str = "synth"
     final_response: str = ""
     duration_ms: int = 0
+    built_app: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         phases = [
@@ -354,6 +355,7 @@ class AgentRunResult:
             "mode_used": self.mode_used,
             "final_response": self.final_response,
             "duration_ms": self.duration_ms,
+            "built_app": self.built_app,
         }
 
 
@@ -442,6 +444,45 @@ class MercuryAgentRuntime:
                 model=spec.id,
                 min_confidence=self.harness.min_confidence,
                 token_budget=2400,
+            )
+
+        # If the user task is an application build request, scaffold & verify a real app in workspaces/
+        is_build_request = bool(
+            re.search(
+                r"^\s*(?:please\s+)?(?:build|create|forge|scaffold|generate)\b|"
+                r"\b(?:build|create|forge|scaffold)\s+(?:me\s+)?(?:a|an|the)?\s*"
+                r"(?:app|application|synth|sequencer|kanban|board|api|service|vault|desktop|cli|dashboard|studio|game|tool)\b",
+                task,
+                re.IGNORECASE,
+            )
+        )
+        if is_build_request and mode != "live":
+            from mercury.templates import build_app_from_template, infer_template_from_prompt
+
+            tpl_id, proj_title = infer_template_from_prompt(task)
+            artifact, trace, grade, distilled = build_app_from_template(
+                self,
+                template_id=tpl_id,
+                project_name=proj_title,
+                custom_prompt=task,
+                model=spec.id,
+                output_root=self.workspace_root / "workspaces",
+            )
+            elapsed_ms = max(1, int((time.perf_counter() - start_ts) * 1000))
+            return AgentRunResult(
+                trace=trace,
+                model_spec=spec,
+                grade=grade,
+                distilled_cards=distilled,
+                injected_pack=pack,
+                recovery_injections=[],
+                mode_used="forge",
+                final_response=(
+                    f"Built & verified application '{artifact.project_name}' in `{artifact.output_dir}` "
+                    f"({artifact.verify_output}). Ready to launch!"
+                ),
+                duration_ms=elapsed_ms,
+                built_app=artifact.as_dict(),
             )
 
         use_live = False

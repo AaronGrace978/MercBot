@@ -3,6 +3,7 @@ import {
   buildFromTemplate,
   compileOperatingPack,
   fetchMercuryState,
+  launchBuiltApp,
   reinforceCards,
   runContrastSmackdown,
   runFrontierAgent,
@@ -19,16 +20,24 @@ import {
 
 const MISSION_PRESETS = [
   {
+    label: "BUILD ACID 303 SYNTH",
+    task: "Build an interactive Acid 303 Bassline Synthesizer & 16-Step Sequencer with WebAudio resonance filter and live oscilloscope.",
+  },
+  {
+    label: "BUILD CYBER KANBAN",
+    task: "Build a Cyber-Zine Incident Command Kanban board with BACKLOG, IN FLIGHT, and VERIFIED lanes.",
+  },
+  {
+    label: "BUILD NEON VAULT API",
+    task: "Build a Neon Vault REST API & SQLite storage service with full CRUD and tag filtering verification.",
+  },
+  {
     label: "AUTH SAMESITE LOOP",
     task: "Login keeps redirecting back to /login after a successful password check. Localize the cookie fault and verify.",
   },
   {
     label: "FLAKY BILLING PYTEST",
     task: "Fix the flaky test that fails with AssertionError in test_billing.py by freezing clock instead of mutating prod.",
-  },
-  {
-    label: "ARGON TIER AUDIT",
-    task: "Audit mercury/tiers.py to verify gemini-4-argon-high and Ollama Cloud flagships classify as FRONTIER.",
   },
 ];
 
@@ -43,14 +52,15 @@ export default function App() {
   const [showKeyVault, setShowKeyVault] = useState<boolean>(false);
 
   // App Forge / Build Templates state
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("acid-synth-web");
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("auto");
   const [forgeProjectName, setForgeProjectName] = useState<string>("Acid Pulse 303");
   const [forgeCustomPrompt, setForgeCustomPrompt] = useState<string>(
-    "Wire TB-303 resonance filter modulation, acid neon UI, and automated smoke tests."
+    "Build an interactive TB-303 acid bassline synthesizer with resonance filter modulation, distortion drive, and 16-step sequencer."
   );
   const [isForging, setIsForging] = useState<boolean>(false);
   const [forgedApp, setForgedApp] = useState<BuiltAppArtifact | null>(null);
   const [selectedForgedFile, setSelectedForgedFile] = useState<string>("");
+  const [stageViewMode, setStageViewMode] = useState<"live" | "code">("live");
 
   // Runtime state
   const [taskInput, setTaskInput] = useState<string>(MISSION_PRESETS[0].task);
@@ -102,6 +112,11 @@ export default function App() {
         if (data.traces.length > 0) {
           setActiveTrace(data.traces[0]);
         }
+        if (data.built_apps && data.built_apps.length > 0) {
+          const latest = data.built_apps[0];
+          setForgedApp(latest);
+          setSelectedForgedFile(latest.files_written?.[0] || "");
+        }
       })
       .catch((err) => {
         setStatusBanner(`BRIDGE WARNING: ${err.message}`);
@@ -149,11 +164,20 @@ export default function App() {
       setRecoveryNotes(res.run.recovery_injections || []);
       setLastModeUsed(res.run.mode_used);
       setLastDurationMs(res.run.duration_ms);
-      setStatusBanner(
-        `RUN COMPLETE // ${res.run.model.name.toUpperCase()} (${res.run.mode_used.toUpperCase()}) — GRADE ${Math.round(
-          res.run.grade.score * 100
-        )}% — DISTILLED ${res.run.distilled_cards.length} CARDS`
-      );
+      if (res.run.built_app) {
+        setForgedApp(res.run.built_app);
+        setSelectedForgedFile(res.run.built_app.files_written?.[0] || "");
+        setStageViewMode("live");
+        setStatusBanner(
+          `APP FORGED & VERIFIED // ${res.run.built_app.project_name.toUpperCase()} -> ${res.run.built_app.output_dir} — READY TO LAUNCH BELOW`
+        );
+      } else {
+        setStatusBanner(
+          `RUN COMPLETE // ${res.run.model.name.toUpperCase()} (${res.run.mode_used.toUpperCase()}) — GRADE ${Math.round(
+            res.run.grade.score * 100
+          )}% — DISTILLED ${res.run.distilled_cards.length} CARDS`
+        );
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatusBanner(`RUNTIME ERROR // ${msg}`);
@@ -224,24 +248,35 @@ export default function App() {
 
   const activeTemplate: AppTemplate | undefined = useMemo(() => {
     const list = state?.templates || [];
+    if (selectedTemplateId === "auto") return undefined;
     return list.find((t) => t.id === selectedTemplateId) || list[0];
   }, [state, selectedTemplateId]);
 
-  async function handleForgeApplication() {
+  async function handleForgeApplication(options?: {
+    launchExternal?: boolean;
+    overridePrompt?: string;
+    overrideName?: string;
+    overrideTemplate?: string;
+  }) {
     if (isForging) return;
     setIsForging(true);
+    const tplToUse = options?.overrideTemplate ?? selectedTemplateId;
+    const promptToUse = options?.overridePrompt ?? forgeCustomPrompt;
+    const nameToUse = options?.overrideName ?? forgeProjectName;
     setStatusBanner(
-      `FORGING APPLICATION // TEMPLATE '${selectedTemplateId.toUpperCase()}' WITH ${selectedModelId.toUpperCase()} ...`
+      `FORGING APPLICATION // '${(nameToUse || tplToUse).toUpperCase()}' WITH ${selectedModelId.toUpperCase()} ...`
     );
     try {
       const res = await buildFromTemplate({
-        template_id: selectedTemplateId,
-        project_name: forgeProjectName,
-        custom_prompt: forgeCustomPrompt,
+        template_id: tplToUse,
+        project_name: nameToUse,
+        custom_prompt: promptToUse,
         model: selectedModelId,
+        launch: Boolean(options?.launchExternal),
       });
       setState(res.state);
       setForgedApp(res.build);
+      setStageViewMode("live");
       const firstFile = res.build.files_written[0] || "";
       setSelectedForgedFile(firstFile);
       const enriched =
@@ -261,6 +296,22 @@ export default function App() {
       setStatusBanner(`FORGE ERROR // ${msg}`);
     } finally {
       setIsForging(false);
+    }
+  }
+
+  async function handleLaunchApp(slug: string, target: "window" | "folder" = "window") {
+    try {
+      setStatusBanner(
+        target === "folder"
+          ? `OPENING WORKSPACE DIRECTORY // ${slug.toUpperCase()} ...`
+          : `LAUNCHING APPLICATION IN OS WINDOW // ${slug.toUpperCase()} ...`
+      );
+      const res = await launchBuiltApp({ project_slug: slug, target });
+      setState(res.state);
+      setStatusBanner(`LAUNCHED // ${res.launch.message.toUpperCase()}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusBanner(`LAUNCH ERROR // ${msg}`);
     }
   }
 
@@ -629,17 +680,140 @@ export default function App() {
                       ))}
                     </div>
 
-                    <button
-                      className="punk-btn primary-ignite"
-                      onClick={handleIgniteRun}
-                      disabled={isRunning}
-                    >
-                      {isRunning
-                        ? "EXECUTING FRONTIER LOOP..."
-                        : `IGNITE ${selectedModelId.toUpperCase()}`}
-                    </button>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                      <button
+                        className="punk-btn acid-launch"
+                        onClick={() =>
+                          handleForgeApplication({
+                            overrideTemplate: "auto",
+                            overridePrompt: taskInput,
+                            overrideName: "",
+                          })
+                        }
+                        disabled={isForging || isRunning}
+                      >
+                        {isForging ? "FORGING APPLICATION..." : "FORGE & LAUNCH APP"}
+                      </button>
+
+                      <button
+                        className="punk-btn primary-ignite"
+                        onClick={handleIgniteRun}
+                        disabled={isRunning || isForging}
+                      >
+                        {isRunning
+                          ? "EXECUTING FRONTIER LOOP..."
+                          : `IGNITE ${selectedModelId.toUpperCase()}`}
+                      </button>
+                    </div>
                   </div>
                 </section>
+
+                {/* ACTIVE FORGED APP LAUNCHER & LIVE STAGE ON TAB 01 */}
+                {forgedApp && (
+                  <section className="zine-panel">
+                    <div className="panel-header">
+                      <div className="panel-title">
+                        <span className="slash">//</span> BUILT APPLICATION READY:{" "}
+                        {forgedApp.project_name} ({forgedApp.project_slug})
+                      </div>
+                      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                        <span className="punk-sticker sticker-acid">
+                          {forgedApp.verification_passed ? "VERIFIED PASS" : "BUILT"}
+                        </span>
+                        <span className="micro-tag" style={{ color: "#9dff00" }}>
+                          {forgedApp.output_dir}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: "10px",
+                        marginBottom: "12px",
+                      }}
+                    >
+                      <div className="provider-pills" style={{ marginBottom: 0 }}>
+                        <button
+                          className={`provider-pill ${stageViewMode === "live" ? "active" : ""}`}
+                          onClick={() => setStageViewMode("live")}
+                        >
+                          LIVE INTERACTIVE STAGE
+                        </button>
+                        <button
+                          className={`provider-pill ${stageViewMode === "code" ? "active" : ""}`}
+                          onClick={() => setStageViewMode("code")}
+                        >
+                          SOURCE FILES ({forgedApp.files_written.length})
+                        </button>
+                      </div>
+
+                      <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                        <button
+                          className="punk-btn acid-launch"
+                          onClick={() => handleLaunchApp(forgedApp.project_slug, "window")}
+                        >
+                          LAUNCH IN OS WINDOW
+                        </button>
+                        <button
+                          className="punk-btn yellow-volt"
+                          onClick={() => handleLaunchApp(forgedApp.project_slug, "folder")}
+                        >
+                          OPEN WORKSPACE DIR
+                        </button>
+                        <button
+                          className="punk-btn"
+                          onClick={() => setActiveTab("forge")}
+                        >
+                          OPEN FULL APP FORGE
+                        </button>
+                      </div>
+                    </div>
+
+                    {stageViewMode === "live" && forgedApp.preview_html ? (
+                      <div className="live-stage-frame">
+                        <div className="live-stage-header">
+                          <span>
+                            <strong style={{ color: "#39ff14" }}>[LIVE STAGE]</strong>{" "}
+                            {forgedApp.project_name} — {forgedApp.verification_output}
+                          </span>
+                          <span style={{ color: "#ff4da6" }}>
+                            ENGINE: {forgedApp.model} // {forgedApp.files_written.join(", ")}
+                          </span>
+                        </div>
+                        <iframe
+                          title={`Live Stage: ${forgedApp.project_name}`}
+                          className="live-stage-iframe"
+                          srcDoc={forgedApp.preview_html}
+                          sandbox="allow-scripts allow-same-origin"
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="provider-pills" style={{ marginBottom: "10px" }}>
+                          {forgedApp.files_written.map((relPath) => (
+                            <button
+                              key={relPath}
+                              className={`provider-pill ${
+                                selectedForgedFile === relPath ? "active" : ""
+                              }`}
+                              onClick={() => setSelectedForgedFile(relPath)}
+                            >
+                              {relPath}
+                            </button>
+                          ))}
+                        </div>
+                        <pre className="code-preview" style={{ maxHeight: "360px" }}>
+                          {forgedApp.file_contents[selectedForgedFile] ||
+                            "// Select a file above to inspect its source"}
+                        </pre>
+                      </div>
+                    )}
+                  </section>
+                )}
 
                 {/* PHASE SEQUENCER & TRACE FEED */}
                 {activeTrace && (
@@ -731,7 +905,7 @@ export default function App() {
                             <div>
                               {ev.tool_calls.map((tc, tci) => (
                                 <span key={tci} className="tool-call-badge">
-                                  ⚡ {tc.name}({JSON.stringify(tc.arguments)})
+                                  [TOOL] {tc.name}({JSON.stringify(tc.arguments)})
                                 </span>
                               ))}
                             </div>
@@ -1117,196 +1291,233 @@ export default function App() {
 
             {/* ── TAB 02: APP FORGE & BUILD TEMPLATES ────────────────────── */}
             {activeTab === "forge" && (
-              <section className="zine-panel">
-                <div className="panel-header">
-                  <div className="panel-title">
-                    <span className="slash">//</span> MERCBOT APPLICATION FORGE & BUILD TEMPLATES
+              <>
+                {/* PANEL 1: PROMPT-TO-APP & BLUEPRINT FORGE CONSOLE */}
+                <section className="zine-panel">
+                  <div className="panel-header">
+                    <div className="panel-title">
+                      <span className="slash">//</span> TELL MERCBOT WHAT TO BUILD — APPLICATION FORGE
+                    </div>
+                    <span className="punk-sticker sticker-acid">
+                      ENGINE: {activeModelSpec?.name || selectedModelId}
+                    </span>
                   </div>
-                  <span
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      fontSize: "11px",
-                      color: "#39ff14",
-                    }}
-                  >
-                    SCAFFOLDS REAL MULTI-FILE APPS + RUNS AUTOMATED VERIFICATION + DISTILLS CARDS
-                  </span>
-                </div>
 
-                {/* Template Cards Grid */}
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fill, minmax(255px, 1fr))",
-                    gap: "12px",
-                    marginBottom: "18px",
-                  }}
-                >
-                  {(state?.templates || []).map((tpl) => {
-                    const isSelected = tpl.id === selectedTemplateId;
-                    return (
-                      <div
+                  {/* Blueprint Mode Selector Pills */}
+                  <div className="provider-pills" style={{ marginBottom: "14px" }}>
+                    <button
+                      className={`provider-pill ${selectedTemplateId === "auto" ? "active" : ""}`}
+                      onClick={() => setSelectedTemplateId("auto")}
+                    >
+                      AUTO DETECT FROM PROMPT
+                    </button>
+                    {(state?.templates || []).map((tpl) => (
+                      <button
                         key={tpl.id}
+                        className={`provider-pill ${selectedTemplateId === tpl.id ? "active" : ""}`}
                         onClick={() => {
                           setSelectedTemplateId(tpl.id);
                           setForgeProjectName(tpl.name);
-                        }}
-                        style={{
-                          cursor: "pointer",
-                          background: isSelected ? "#112818" : "#08120c",
-                          border: `2px solid ${isSelected ? "#39ff14" : "#1f472a"}`,
-                          boxShadow: isSelected ? "4px 4px 0px #ff007f" : "none",
-                          padding: "12px",
-                          transition: "all 0.12s ease",
+                          setForgeCustomPrompt(tpl.tagline);
                         }}
                       >
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            marginBottom: "6px",
-                          }}
-                        >
-                          <span className="punk-sticker sticker-acid" style={{ fontSize: "10px" }}>
-                            {tpl.category.toUpperCase()}
-                          </span>
-                          <span
-                            style={{
-                              fontFamily: "var(--font-mono)",
-                              fontSize: "10px",
-                              color: "#9dff00",
-                            }}
-                          >
-                            {tpl.files.length} FILES
-                          </span>
-                        </div>
-                        <div
-                          style={{
-                            fontFamily: "var(--font-display)",
-                            fontSize: "16px",
-                            color: "#eaffea",
-                            marginBottom: "6px",
-                          }}
-                        >
-                          {tpl.name}
-                        </div>
-                        <div
-                          style={{
-                            fontSize: "12px",
-                            color: "#9ec8a8",
-                            marginBottom: "10px",
-                            lineHeight: 1.4,
-                          }}
-                        >
-                          {tpl.tagline}
-                        </div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
-                          {tpl.stack.map((tech) => (
-                            <span key={tech} className="specialty-chip">
-                              {tech}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                        {tpl.id.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
 
-                {/* Forge Controls */}
-                <div
-                  className="zine-panel magenta-frame"
-                  style={{ marginBottom: "18px", background: "#09140d" }}
-                >
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "1fr 2fr auto",
+                      gridTemplateColumns: "1fr 2fr",
                       gap: "12px",
-                      alignItems: "end",
+                      marginBottom: "12px",
                     }}
                   >
                     <div>
-                      <div
+                      <label
                         style={{
+                          display: "block",
                           fontFamily: "var(--font-mono)",
                           fontSize: "11px",
                           color: "#9dff00",
-                          marginBottom: "4px",
+                          marginBottom: "6px",
                         }}
                       >
-                        PROJECT NAME
-                      </div>
+                        PROJECT NAME (OPTIONAL — AUTO-NAMED IF BLANK)
+                      </label>
                       <input
                         className="punk-input"
                         value={forgeProjectName}
                         onChange={(e) => setForgeProjectName(e.target.value)}
-                        placeholder="e.g. Acid Pulse 303"
+                        placeholder="e.g. Acid Pulse 303, Cyber Kanban, Neon Vault..."
                       />
                     </div>
+
                     <div>
-                      <div
+                      <label
                         style={{
+                          display: "block",
                           fontFamily: "var(--font-mono)",
                           fontSize: "11px",
-                          color: "#ff007f",
-                          marginBottom: "4px",
+                          color: "#ff4da6",
+                          marginBottom: "6px",
                         }}
                       >
-                        CUSTOM ARCHITECTURE / FEATURE PROMPT
-                      </div>
-                      <input
+                        SELECTED BLUEPRINT MODE
+                      </label>
+                      <div
                         className="punk-input"
-                        value={forgeCustomPrompt}
-                        onChange={(e) => setForgeCustomPrompt(e.target.value)}
-                        placeholder="Describe custom features or constraints..."
-                      />
+                        style={{
+                          color: "#ecfff0",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
+                      >
+                        <span>
+                          {selectedTemplateId === "auto"
+                            ? "AUTO-DETECT BLUEPRINT FROM YOUR PROMPT BELOW"
+                            : `${activeTemplate?.name} (${activeTemplate?.files.length} files)`}
+                        </span>
+                        <span style={{ color: "#f5ff00", fontSize: "11px" }}>
+                          {activeTemplate ? activeTemplate.verify_command : "python verify_*.py"}
+                        </span>
+                      </div>
                     </div>
-                    <button
-                      className="ignite-btn"
-                      style={{ padding: "10px 22px", fontSize: "14px" }}
-                      onClick={handleForgeApplication}
-                      disabled={isForging}
-                    >
-                      {isForging
-                        ? "FORGING APP..."
-                        : `⚡ FORGE WITH ${activeModelSpec?.name || selectedModelId}`}
-                    </button>
                   </div>
 
-                  {activeTemplate && (
+                  <label
+                    style={{
+                      display: "block",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: "11px",
+                      color: "#39ff14",
+                      marginBottom: "6px",
+                    }}
+                  >
+                    DESCRIBE WHAT YOU WANT MERCBOT TO BUILD (ARCHITECTURE, FEATURES, UI, OR TASK)
+                  </label>
+                  <textarea
+                    className="punk-textarea"
+                    value={forgeCustomPrompt}
+                    onChange={(e) => setForgeCustomPrompt(e.target.value)}
+                    placeholder="Tell MercBot what to build in plain English (e.g. 'Build a 303 acid bassline synthesizer with resonance filter', 'Build a cyberpunk incident Kanban board', 'Build a SQLite REST API vault', or any custom interactive app)..."
+                  />
+
+                  <div className="preset-chips">
+                    <span
+                      style={{
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "11px",
+                        color: "#8ab896",
+                        alignSelf: "center",
+                      }}
+                    >
+                      QUICK BUILD PROMPTS:
+                    </span>
+                    {[
+                      {
+                        label: "303 ACID SYNTH & SEQUENCER",
+                        tpl: "acid-synth-web",
+                        name: "Acid Pulse 303",
+                        prompt:
+                          "Build an interactive 16-step TB-303 acid bassline synthesizer with WebAudio sawtooth/square oscillator, resonant filter, distortion rack, and live oscilloscope.",
+                      },
+                      {
+                        label: "CYBER KANBAN COMMAND BOARD",
+                        tpl: "cyber-kanban-board",
+                        name: "Cyber Incident Board",
+                        prompt:
+                          "Build a brutalist neon Kanban & incident command board with BACKLOG, IN FLIGHT, and VERIFIED lanes.",
+                      },
+                      {
+                        label: "NEON VAULT SQLITE API",
+                        tpl: "neon-vault-api",
+                        name: "Neon Vault Service",
+                        prompt:
+                          "Build a zero-dependency Python REST microservice & SQLite storage engine with full CRUD and tag filtering.",
+                      },
+                      {
+                        label: "CUSTOM TELEMETRY MATRIX STUDIO",
+                        tpl: "custom-prompt-app",
+                        name: "Argon Telemetry Matrix",
+                        prompt:
+                          "Build an interactive neural node matrix visualizer and command execution deck with real-time particle physics.",
+                      },
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        className="preset-chip"
+                        onClick={() => {
+                          setSelectedTemplateId(item.tpl);
+                          setForgeProjectName(item.name);
+                          setForgeCustomPrompt(item.prompt);
+                        }}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="launch-bar">
                     <div
                       style={{
-                        marginTop: "10px",
-                        display: "flex",
-                        justifyContent: "space-between",
                         fontFamily: "var(--font-mono)",
                         fontSize: "11px",
                         color: "#8ab896",
                       }}
                     >
-                      <span>
-                        TEMPLATE FILES:{" "}
-                        <strong style={{ color: "#39ff14" }}>
-                          {activeTemplate.files.map((f) => f.path).join(", ")}
-                        </strong>
-                      </span>
-                      <span>
-                        VERIFY CMD:{" "}
-                        <code style={{ color: "#f5ff00" }}>{activeTemplate.verify_command}</code>
-                      </span>
+                      OUTPUT TARGET: <strong style={{ color: "#39ff14" }}>workspaces/&lt;slug&gt;/</strong>{" "}
+                      • AUTO-RUNS PYTHON VERIFICATION SUITE & DISTILLS CARDS
                     </div>
-                  )}
-                </div>
 
-                {/* Forged App Output Inspector */}
-                {forgedApp ? (
-                  <div>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                      <button
+                        className="punk-btn acid-launch"
+                        onClick={() => handleForgeApplication({ launchExternal: true })}
+                        disabled={isForging}
+                      >
+                        {isForging
+                          ? "FORGING & LAUNCHING..."
+                          : "FORGE + LAUNCH IN OS WINDOW"}
+                      </button>
+
+                      <button
+                        className="punk-btn primary-ignite"
+                        onClick={() => handleForgeApplication({ launchExternal: false })}
+                        disabled={isForging}
+                      >
+                        {isForging
+                          ? "FORGING APPLICATION..."
+                          : `FORGE APPLICATION // ${selectedModelId.toUpperCase()}`}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                {/* PANEL 2: LIVE APPLICATION RUNNER & LAUNCH DECK */}
+                {forgedApp && (
+                  <section className="zine-panel magenta-frame">
+                    <div className="panel-header">
+                      <div className="panel-title">
+                        <span className="slash">//</span> LIVE APPLICATION STAGE & LAUNCHER:{" "}
+                        {forgedApp.project_name}
+                      </div>
+                      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                        <span className="punk-sticker sticker-acid">
+                          {forgedApp.verification_passed ? "VERIFIED PASS (100%)" : "BUILT"}
+                        </span>
+                        <span className="punk-sticker sticker-magenta">{forgedApp.model}</span>
+                      </div>
+                    </div>
+
+                    {/* Telemetry VU Cards */}
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "repeat(4, 1fr)",
-                        gap: "10px",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                        gap: "12px",
                         marginBottom: "14px",
                       }}
                     >
@@ -1319,7 +1530,7 @@ export default function App() {
                           style={{
                             fontFamily: "var(--font-mono)",
                             fontSize: "11px",
-                            color: "#eaffea",
+                            color: "#ecfff0",
                             wordBreak: "break-all",
                           }}
                         >
@@ -1332,10 +1543,10 @@ export default function App() {
                           <span>VERIFICATION SUITE</span>
                           <strong
                             style={{
-                              color: forgedApp.verification_passed ? "#39ff14" : "#ff0055",
+                              color: forgedApp.verification_passed ? "#39ff14" : "#ff007f",
                             }}
                           >
-                            {forgedApp.verification_passed ? "PASS (100%)" : "FAILED"}
+                            {forgedApp.verification_passed ? "PASS" : "CHECK"}
                           </strong>
                         </div>
                         <div
@@ -1351,7 +1562,7 @@ export default function App() {
 
                       <div className="vu-card">
                         <div className="vu-header">
-                          <span>FILES WRITTEN</span>
+                          <span>GENERATED FILES</span>
                           <strong style={{ color: "#f5ff00" }}>
                             {forgedApp.files_written.length}
                           </strong>
@@ -1360,71 +1571,230 @@ export default function App() {
                           style={{
                             fontFamily: "var(--font-mono)",
                             fontSize: "11px",
-                            color: "#eaffea",
+                            color: "#ecfff0",
                           }}
                         >
                           {forgedApp.files_written.join(", ")}
                         </div>
                       </div>
+                    </div>
 
-                      <div className="vu-card">
-                        <div className="vu-header">
-                          <span>LAUNCH / RUN HINT</span>
-                          <strong style={{ color: "#ff007f" }}>{forgedApp.model}</strong>
+                    {/* Launch & View Mode Bar */}
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: "10px",
+                        marginBottom: "12px",
+                      }}
+                    >
+                      <div className="provider-pills" style={{ marginBottom: 0 }}>
+                        <button
+                          className={`provider-pill ${stageViewMode === "live" ? "active" : ""}`}
+                          onClick={() => setStageViewMode("live")}
+                        >
+                          VIEW: LIVE RUNNING APP
+                        </button>
+                        <button
+                          className={`provider-pill ${stageViewMode === "code" ? "active" : ""}`}
+                          onClick={() => setStageViewMode("code")}
+                        >
+                          VIEW: SOURCE CODE ({forgedApp.files_written.length} FILES)
+                        </button>
+                      </div>
+
+                      <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                        <button
+                          className="punk-btn acid-launch"
+                          onClick={() => handleLaunchApp(forgedApp.project_slug, "window")}
+                        >
+                          LAUNCH IN OS WINDOW
+                        </button>
+                        <button
+                          className="punk-btn yellow-volt"
+                          onClick={() => handleLaunchApp(forgedApp.project_slug, "folder")}
+                        >
+                          OPEN WORKSPACE DIR
+                        </button>
+                      </div>
+                    </div>
+
+                    {stageViewMode === "live" && forgedApp.preview_html ? (
+                      <div className="live-stage-frame">
+                        <div className="live-stage-header">
+                          <span>
+                            <strong style={{ color: "#39ff14" }}>[INTERACTIVE STAGE]</strong>{" "}
+                            {forgedApp.project_name} ({forgedApp.template_name})
+                          </span>
+                          <span style={{ color: "#9dff00" }}>
+                            INTERACT DIRECTLY BELOW OR CLICK &ldquo;LAUNCH IN OS WINDOW&rdquo;
+                          </span>
                         </div>
-                        <div
+                        <iframe
+                          title={`MercBot Live App: ${forgedApp.project_name}`}
+                          className="live-stage-iframe"
+                          srcDoc={forgedApp.preview_html}
+                          sandbox="allow-scripts allow-same-origin"
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="provider-pills" style={{ marginBottom: "10px" }}>
+                          {forgedApp.files_written.map((relPath) => (
+                            <button
+                              key={relPath}
+                              className={`provider-pill ${
+                                selectedForgedFile === relPath ? "active" : ""
+                              }`}
+                              onClick={() => setSelectedForgedFile(relPath)}
+                            >
+                              {relPath}
+                            </button>
+                          ))}
+                        </div>
+                        <pre className="code-preview" style={{ maxHeight: "460px" }}>
+                          {forgedApp.file_contents[selectedForgedFile] ||
+                            "// Select a forged file above to inspect its source code"}
+                        </pre>
+                      </div>
+                    )}
+                  </section>
+                )}
+
+                {/* PANEL 3: FORGED WORKSPACES LIBRARY & BLUEPRINT CATALOG */}
+                <section className="zine-panel">
+                  {state?.built_apps && state.built_apps.length > 0 && (
+                    <div style={{ marginBottom: "22px" }}>
+                      <div className="panel-header">
+                        <div className="panel-title">
+                          <span className="slash">//</span> FORGED WORKSPACES LIBRARY (
+                          {state.built_apps.length} BUILT APPS IN WORKSPACES/)
+                        </div>
+                        <span
                           style={{
                             fontFamily: "var(--font-mono)",
                             fontSize: "11px",
-                            color: "#39ff14",
+                            color: "#8ab896",
                           }}
                         >
-                          {forgedApp.run_hint}
-                        </div>
+                          CLICK ANY FORGED APP TO RUN IN STAGE OR LAUNCH IN OS WINDOW
+                        </span>
+                      </div>
+
+                      <div className="built-apps-shelf">
+                        {state.built_apps.map((app) => {
+                          const isCurrent = forgedApp?.project_slug === app.project_slug;
+                          return (
+                            <div
+                              key={app.project_slug}
+                              className={`built-app-card ${isCurrent ? "active" : ""}`}
+                            >
+                              <div className="model-card-top">
+                                <span className="model-name">{app.project_name}</span>
+                                <span className="kind-stamp">
+                                  {app.verification_passed ? "VERIFIED" : "BUILT"}
+                                </span>
+                              </div>
+                              <div className="model-slug">
+                                slug: {app.project_slug} • model: {app.model}
+                              </div>
+                              <div className="model-tagline">{app.output_dir}</div>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: "6px",
+                                  flexWrap: "wrap",
+                                  marginTop: "auto",
+                                }}
+                              >
+                                <button
+                                  className="punk-btn"
+                                  style={{ padding: "5px 10px", fontSize: "11px" }}
+                                  onClick={() => {
+                                    setForgedApp(app);
+                                    setSelectedForgedFile(app.files_written?.[0] || "");
+                                    setStageViewMode("live");
+                                  }}
+                                >
+                                  RUN IN STAGE
+                                </button>
+                                <button
+                                  className="punk-btn acid-launch"
+                                  style={{ padding: "5px 10px", fontSize: "11px" }}
+                                  onClick={() => handleLaunchApp(app.project_slug, "window")}
+                                >
+                                  LAUNCH WINDOW
+                                </button>
+                                <button
+                                  className="punk-btn yellow-volt"
+                                  style={{ padding: "5px 10px", fontSize: "11px" }}
+                                  onClick={() => handleLaunchApp(app.project_slug, "folder")}
+                                >
+                                  OPEN DIR
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
+                  )}
 
-                    {/* File Tabs + Code Viewer */}
-                    <div className="provider-pills" style={{ marginBottom: "10px" }}>
-                      {forgedApp.files_written.map((relPath) => (
-                        <button
-                          key={relPath}
-                          className={`provider-pill ${
-                            selectedForgedFile === relPath ? "active" : ""
-                          }`}
-                          onClick={() => setSelectedForgedFile(relPath)}
-                        >
-                          {relPath}
-                        </button>
-                      ))}
+                  <div className="panel-header">
+                    <div className="panel-title">
+                      <span className="slash">//</span> APPLICATION BLUEPRINT CATALOG (
+                      {state?.templates?.length ?? 6} STARTER ARCHITECTURES)
                     </div>
-
-                    <pre className="code-preview" style={{ maxHeight: "420px" }}>
-                      {forgedApp.file_contents[selectedForgedFile] ||
-                        "// Select a forged file above to inspect its source code"}
-                    </pre>
+                    <span
+                      style={{
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "11px",
+                        color: "#39ff14",
+                      }}
+                    >
+                      SELECT A BLUEPRINT TO LOAD INTO THE FORGE CONSOLE ABOVE
+                    </span>
                   </div>
-                ) : (
-                  activeTemplate && (
-                    <div>
-                      <div
-                        style={{
-                          fontFamily: "var(--font-mono)",
-                          fontSize: "12px",
-                          color: "#9dff00",
-                          marginBottom: "8px",
-                        }}
-                      >
-                        TEMPLATE BLUEPRINT PREVIEW // {activeTemplate.name.toUpperCase()} (Click ⚡
-                        FORGE above to scaffold into workspaces/ and run verification tests)
-                      </div>
-                      <pre className="code-preview" style={{ maxHeight: "340px" }}>
-                        {activeTemplate.files[0]?.content}
-                      </pre>
-                    </div>
-                  )
-                )}
-              </section>
+
+                  <div className="forge-template-grid">
+                    {(state?.templates || []).map((tpl) => {
+                      const isSelected = tpl.id === selectedTemplateId;
+                      return (
+                        <div
+                          key={tpl.id}
+                          className={`forge-template-card ${isSelected ? "selected" : ""}`}
+                          onClick={() => {
+                            setSelectedTemplateId(tpl.id);
+                            setForgeProjectName(tpl.name);
+                            setForgeCustomPrompt(tpl.tagline);
+                          }}
+                        >
+                          <div className="model-card-top">
+                            <span className="kind-stamp">{tpl.category}</span>
+                            <span className="micro-tag" style={{ color: "#9dff00" }}>
+                              {tpl.files.length} FILES
+                            </span>
+                          </div>
+                          <div className="model-name" style={{ fontSize: "15px" }}>
+                            {tpl.name}
+                          </div>
+                          <div className="model-slug">id: {tpl.id}</div>
+                          <div className="model-tagline">{tpl.tagline}</div>
+                          <div className="model-tags" style={{ marginTop: "auto" }}>
+                            {tpl.stack.map((tech) => (
+                              <span key={tech} className="micro-tag">
+                                {tech}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              </>
             )}
           </main>
         </div>

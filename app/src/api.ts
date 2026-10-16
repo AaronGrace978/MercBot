@@ -1,6 +1,7 @@
 import {
   BuildAppResponse,
   ContrastResponse,
+  LaunchAppResponse,
   MercuryState,
   PackResponse,
   RunAgentResponse,
@@ -58,8 +59,16 @@ export function buildFromTemplate(params: {
   project_name?: string;
   custom_prompt?: string;
   model: string;
+  launch?: boolean;
 }): Promise<BuildAppResponse> {
   return callBackend<BuildAppResponse>("mercury_build", "/api/build", "POST", params);
+}
+
+export function launchBuiltApp(params: {
+  project_slug: string;
+  target?: "window" | "folder";
+}): Promise<LaunchAppResponse> {
+  return callBackend<LaunchAppResponse>("mercury_launch", "/api/launch", "POST", params);
 }
 
 export function runContrastSmackdown(teacherModel: string): Promise<ContrastResponse> {

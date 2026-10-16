@@ -157,6 +157,7 @@ export interface BuiltAppArtifact {
   trace_id: string;
   custom_prompt: string;
   run_hint: string;
+  preview_html?: string;
 }
 
 export interface MercuryState {
@@ -171,9 +172,29 @@ export interface MercuryState {
 
 export interface BuildAppResponse {
   build: BuiltAppArtifact;
+  launch?: {
+    launched: boolean;
+    target?: string;
+    project_slug?: string;
+    output_dir?: string;
+    launched_path?: string;
+    message?: string;
+  } | null;
   trace: AgentTrace;
   grade: BehaviorGrade;
   distilled_cards: OperationalCard[];
+  state: MercuryState;
+}
+
+export interface LaunchAppResponse {
+  launch: {
+    launched: boolean;
+    target: string;
+    project_slug: string;
+    output_dir: string;
+    launched_path: string;
+    message: string;
+  };
   state: MercuryState;
 }
 
@@ -195,6 +216,7 @@ export interface RunAgentResponse {
     mode_used: string;
     final_response: string;
     duration_ms: number;
+    built_app?: BuiltAppArtifact | null;
   };
   state: MercuryState;
 }

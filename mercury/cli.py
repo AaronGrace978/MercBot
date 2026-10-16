@@ -105,12 +105,12 @@ def main(argv: list[str] | None = None) -> int:
 
     build_cmd = sub.add_parser(
         "build",
-        help="Scaffold, customize, and verify an application from a MercBot Build Template",
+        help="Scaffold, customize, and verify an application from a prompt or MercBot Build Template",
     )
     build_cmd.add_argument(
         "--template",
-        default="acid-synth-web",
-        help="Template ID (e.g. acid-synth-web, neon-vault-api, tauri-punk-starter, frontier-agent-cli, cyber-kanban-board)",
+        default="auto",
+        help="Template ID (auto, custom-prompt-app, acid-synth-web, neon-vault-api, tauri-punk-starter, frontier-agent-cli, cyber-kanban-board)",
     )
     build_cmd.add_argument("--name", default="", help="Custom project name / title")
     build_cmd.add_argument("--prompt", default="", help="Custom feature / architecture brief")
@@ -124,7 +124,22 @@ def main(argv: list[str] | None = None) -> int:
         default="workspaces",
         help="Output workspace parent directory (default: workspaces)",
     )
+    build_cmd.add_argument("--launch", action="store_true", help="Immediately launch the built application after verification")
     build_cmd.add_argument("--json", action="store_true", help="Print full build artifact as JSON")
+
+    launch_cmd = sub.add_parser(
+        "launch",
+        help="Launch a built application from workspaces/ in a window or open its folder",
+    )
+    launch_cmd.add_argument(
+        "app",
+        nargs="?",
+        default="",
+        help="Project slug or directory name in workspaces/ (defaults to most recently built app)",
+    )
+    launch_cmd.add_argument("--folder", action="store_true", help="Open workspace directory in file explorer instead of launching app")
+    launch_cmd.add_argument("--output-dir", default="workspaces", help="Workspaces parent directory (default: workspaces)")
+    launch_cmd.add_argument("--json", action="store_true", help="Print launch result as JSON")
 
     serve_cmd = sub.add_parser("serve", help="Start the local MercBot HTTP bridge server")
     serve_cmd.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
@@ -133,7 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     bridge_cmd = sub.add_parser("bridge", help="Single-shot JSON bridge for Tauri desktop IPC")
     bridge_cmd.add_argument(
         "action",
-        choices=("state", "run", "build", "templates", "contrast", "pack", "reinforce", "seed"),
+        choices=("state", "run", "build", "launch", "templates", "contrast", "pack", "reinforce", "seed"),
     )
     bridge_cmd.add_argument("--payload", default="{}", help="JSON payload string")
 
@@ -253,27 +268,62 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "build":
         from mercury.runtime import MercuryAgentRuntime
+        from mercury.templates import infer_template_from_prompt, launch_built_app
+
+        tpl_id = args.template
+        proj_name = args.name
+        if tpl_id in ("auto", "prompt", "freeform", ""):
+            tpl_id, inferred_name = infer_template_from_prompt(args.prompt or args.name or "Acid 303 Synth")
+            if not proj_name:
+                proj_name = inferred_name
 
         runtime = MercuryAgentRuntime(harness, store_path=args.store)
         res = runtime.build_template(
-            args.template,
-            project_name=args.name,
+            tpl_id,
+            project_name=proj_name,
             custom_prompt=args.prompt,
             model=args.model,
             output_root=args.output_dir,
         )
+        art = res["artifact"]
+        if args.launch:
+            res["launch"] = launch_built_app(art["project_slug"], target="window", output_root=args.output_dir)
         if args.json:
             json.dump(res, sys.stdout, indent=2, default=str)
             sys.stdout.write("\n")
         else:
-            art = res["artifact"]
             print(f"FORGED APPLICATION: {art['project_name']} ({art['template_name']})")
             print(f"Output Dir : {art['output_dir']}")
             print(f"Model      : {art['model']} | Trace: {art['trace_id']}")
             print(f"Files      : {', '.join(art['files_written'])}")
             print(f"Verified   : {'PASS' if art['verification_passed'] else 'FAIL'}")
             print(f"Verify Out : {art['verification_output']}")
-            print(f"Run Hint   : {art['run_hint']}")
+            print(f"Launch Cmd : mercury launch {art['project_slug']}")
+            if args.launch and "launch" in res:
+                print(f"Launched   : {res['launch']['message']}")
+        return 0
+
+    if args.command == "launch":
+        from mercury.templates import launch_built_app, list_built_apps
+
+        slug = args.app.strip()
+        if not slug:
+            built = list_built_apps(args.output_dir)
+            if not built:
+                print("No forged applications found in workspaces/. Run `mercury build --prompt \"...\"` first.", file=sys.stderr)
+                return 1
+            slug = str(built[0]["project_slug"])
+        info = launch_built_app(
+            slug,
+            target="folder" if args.folder else "window",
+            output_root=args.output_dir,
+        )
+        if args.json:
+            json.dump(info, sys.stdout, indent=2, default=str)
+            sys.stdout.write("\n")
+        else:
+            print(f"LAUNCHED: {info['message']}")
+            print(f"Path    : {info['launched_path']}")
         return 0
 
     if args.command == "serve":
@@ -296,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
             out = bridge.run_agent(payload)
         elif args.action == "build":
             out = bridge.build_app(payload)
+        elif args.action == "launch":
+            out = bridge.launch_app(payload)
         elif args.action == "templates":
             out = {"templates": [t.model_dump() for t in list_build_templates()]}
         elif args.action == "contrast":
