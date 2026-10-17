@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FixedSizeList as VirtualList, ListChildComponentProps } from "react-window";
 import {
   buildFromTemplate,
   compileOperatingPack,
@@ -7,6 +8,7 @@ import {
   reinforceCards,
   runContrastSmackdown,
   runFrontierAgent,
+  subscribeMercurySSE,
 } from "./api";
 import {
   AgentTrace,
@@ -16,7 +18,77 @@ import {
   FrontierModelSpec,
   MercuryState,
   PackResponse,
+  StreamChunkEvent,
 } from "./types";
+
+export interface VirtualTerminalLine {
+  id: string;
+  badge: string;
+  kind: "user" | "assistant" | "tool" | "system" | "stream" | "error" | "spec";
+  text: string;
+}
+
+const VirtualTerminalRow: React.FC<ListChildComponentProps<VirtualTerminalLine[]>> = ({
+  index,
+  style,
+  data,
+}) => {
+  const row = data[index];
+  if (!row) return null;
+  const colorMap: Record<VirtualTerminalLine["kind"], string> = {
+    user: "#f5ff00",
+    assistant: "#39ff14",
+    tool: "#9dff00",
+    system: "#8ab896",
+    stream: "#00ffa3",
+    error: "#ff007f",
+    spec: "#ff4da6",
+  };
+  return (
+    <div
+      style={{
+        ...style,
+        display: "flex",
+        alignItems: "center",
+        gap: "10px",
+        padding: "0 12px",
+        borderBottom: "1px solid rgba(57, 255, 20, 0.14)",
+        fontFamily: "var(--font-mono)",
+        fontSize: "12px",
+        background:
+          row.kind === "error"
+            ? "rgba(255, 0, 127, 0.12)"
+            : index % 2 === 0
+            ? "rgba(6, 17, 10, 0.85)"
+            : "rgba(10, 26, 15, 0.85)",
+        overflow: "hidden",
+        whiteSpace: "nowrap",
+        textOverflow: "ellipsis",
+      }}
+      title={row.text}
+    >
+      <span
+        style={{
+          color: colorMap[row.kind],
+          fontWeight: 800,
+          minWidth: "130px",
+          flexShrink: 0,
+        }}
+      >
+        {row.badge}
+      </span>
+      <span
+        style={{
+          color: row.kind === "error" ? "#ff4da6" : "#ecfff0",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {row.text}
+      </span>
+    </div>
+  );
+};
 
 const MISSION_PRESETS = [
   {
@@ -73,6 +145,64 @@ export default function App() {
   const [statusBanner, setStatusBanner] = useState<string>(
     "SYSTEM ARMED // GEMINI 4 ARGON & OLLAMA CLOUD FRONTIER ENGINES READY"
   );
+  const [streamLines, setStreamLines] = useState<VirtualTerminalLine[]>([]);
+  const virtualListRef = useRef<VirtualList>(null);
+
+  const handleStreamChunk = useCallback((chunk: StreamChunkEvent) => {
+    if (!chunk || chunk.type === "connected" || chunk.type === "complete") return;
+    setStreamLines((prev) => {
+      const nextId = `stream-${prev.length + 1}-${Date.now()}`;
+      if (chunk.type === "token" && chunk.content) {
+        return [
+          ...prev,
+          {
+            id: nextId,
+            badge: `[TOKEN S${chunk.step ?? 0}]`,
+            kind: "stream",
+            text: chunk.content.replace(/\s+/g, " ").trim() || chunk.content,
+          },
+        ];
+      }
+      if (chunk.type === "terminal_chunk" && chunk.content) {
+        return [
+          ...prev,
+          {
+            id: nextId,
+            badge: `[${(chunk.tool_name || "TERM").toUpperCase()}]`,
+            kind: chunk.is_error ? "error" : "tool",
+            text: chunk.content,
+          },
+        ];
+      }
+      if (chunk.type === "spec_check") {
+        return [
+          ...prev,
+          {
+            id: nextId,
+            badge: chunk.passed ? "[SPEC.MD PASS]" : "[SPEC.MD FAIL]",
+            kind: "spec",
+            text: chunk.summary || "SPEC.md architectural manifest verified",
+          },
+        ];
+      }
+      if (chunk.type === "trace_event") {
+        const tcText =
+          chunk.tool_calls && chunk.tool_calls.length > 0
+            ? chunk.tool_calls.map((tc) => `${tc.name}(${JSON.stringify(tc.arguments)})`).join(", ")
+            : chunk.content || "";
+        return [
+          ...prev,
+          {
+            id: nextId,
+            badge: `[STEP ${chunk.step ?? 0} ${(chunk.event_type || "EVENT").toUpperCase()}]`,
+            kind: chunk.is_error ? "error" : "assistant",
+            text: tcText,
+          },
+        ];
+      }
+      return prev;
+    });
+  }, []);
 
   // Gatekeeper test input
   const [bouncerInput, setBouncerInput] = useState<string>("gpt-4o-mini");
@@ -121,7 +251,12 @@ export default function App() {
       .catch((err) => {
         setStatusBanner(`BRIDGE WARNING: ${err.message}`);
       });
-  }, []);
+
+    const unsubscribeSSE = subscribeMercurySSE(handleStreamChunk);
+    return () => {
+      unsubscribeSSE();
+    };
+  }, [handleStreamChunk]);
 
   const filteredModels = useMemo(() => {
     if (!state) return [];
@@ -142,17 +277,21 @@ export default function App() {
   async function handleIgniteRun() {
     if (!taskInput.trim() || isRunning) return;
     setIsRunning(true);
+    setStreamLines([]);
     setStatusBanner(`IGNITING FRONTIER AGENT // ${selectedModelId.toUpperCase()} ...`);
     try {
       const nonEmptyKeys = Object.fromEntries(
         Object.entries(apiKeys).filter(([_, v]) => v.trim().length > 0)
       );
-      const res = await runFrontierAgent({
-        task: taskInput,
-        model: selectedModelId,
-        mode: execMode,
-        api_keys: nonEmptyKeys,
-      });
+      const res = await runFrontierAgent(
+        {
+          task: taskInput,
+          model: selectedModelId,
+          mode: execMode,
+          api_keys: nonEmptyKeys,
+        },
+        handleStreamChunk
+      );
       setState(res.state);
       const enriched =
         res.state.traces.find((t) => t.id === res.run.trace.id) || {
@@ -260,6 +399,7 @@ export default function App() {
   }) {
     if (isForging) return;
     setIsForging(true);
+    setStreamLines([]);
     const tplToUse = options?.overrideTemplate ?? selectedTemplateId;
     const promptToUse = options?.overridePrompt ?? forgeCustomPrompt;
     const nameToUse = options?.overrideName ?? forgeProjectName;
@@ -267,13 +407,16 @@ export default function App() {
       `FORGING APPLICATION // '${(nameToUse || tplToUse).toUpperCase()}' WITH ${selectedModelId.toUpperCase()} ...`
     );
     try {
-      const res = await buildFromTemplate({
-        template_id: tplToUse,
-        project_name: nameToUse,
-        custom_prompt: promptToUse,
-        model: selectedModelId,
-        launch: Boolean(options?.launchExternal),
-      });
+      const res = await buildFromTemplate(
+        {
+          template_id: tplToUse,
+          project_name: nameToUse,
+          custom_prompt: promptToUse,
+          model: selectedModelId,
+          launch: Boolean(options?.launchExternal),
+        },
+        handleStreamChunk
+      );
       setState(res.state);
       setForgedApp(res.build);
       setStageViewMode("live");
@@ -289,7 +432,7 @@ export default function App() {
       setStatusBanner(
         `APPLICATION FORGED // ${res.build.project_name.toUpperCase()} -> ${
           res.build.output_dir
-        } (${res.build.verification_passed ? "VERIFIED PASS" : "CHECK OUTPUT"})`
+        } (${res.build.verification_passed ? "SPEC.MD + VERIFIED PASS" : "CHECK OUTPUT"})`
       );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -328,6 +471,48 @@ export default function App() {
     return new Set((activeTrace?.phases || []).map((p) => p.name));
   }, [activeTrace]);
 
+  const virtualTerminalLines = useMemo<VirtualTerminalLine[]>(() => {
+    const rows: VirtualTerminalLine[] = [];
+    if (streamLines.length > 0) {
+      rows.push(...streamLines);
+    }
+    if (activeTrace?.events) {
+      activeTrace.events.forEach((ev, idx) => {
+        const stepBadge = `STEP ${idx + 1} // ${ev.type.toUpperCase()}${
+          ev.tool_name ? `(${ev.tool_name})` : ""
+        }`;
+        if (ev.tool_calls && ev.tool_calls.length > 0) {
+          ev.tool_calls.forEach((tc, tci) => {
+            rows.push({
+              id: `ev-${idx}-tc-${tci}`,
+              badge: stepBadge,
+              kind: ev.is_error ? "error" : "tool",
+              text: `[TOOL] ${tc.name}(${JSON.stringify(tc.arguments)})`,
+            });
+          });
+        }
+        if (ev.content) {
+          const contentLines = ev.content.split(/\r?\n/).filter((l) => l.trim().length > 0);
+          contentLines.forEach((line, li) => {
+            rows.push({
+              id: `ev-${idx}-ln-${li}`,
+              badge: li === 0 ? stepBadge : `  ↳ LINE ${li + 1}`,
+              kind: ev.is_error ? "error" : ev.type,
+              text: line,
+            });
+          });
+        }
+      });
+    }
+    return rows;
+  }, [streamLines, activeTrace]);
+
+  useEffect(() => {
+    if (virtualListRef.current && virtualTerminalLines.length > 0) {
+      virtualListRef.current.scrollToItem(virtualTerminalLines.length - 1, "end");
+    }
+  }, [virtualTerminalLines.length]);
+
   return (
     <div className={scanlines ? "scanlines" : ""}>
       <div className="hazard-bar" />
@@ -340,7 +525,7 @@ export default function App() {
               alt="MercBot Acid Brain Emblem"
               className="brain-emblem"
             />
-            <div className="brain-tag">ACID CORE v0.2</div>
+            <div className="brain-tag">ACID CORE v0.3</div>
           </div>
 
           <div className="header-copy">
@@ -880,38 +1065,48 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* TRACE EVENTS */}
-                    <div className="trace-stream">
-                      {activeTrace.events.map((ev, idx) => (
-                        <div
-                          key={idx}
-                          className={`event-row event-${ev.type} ${
-                            ev.is_error ? "event-error" : ""
-                          }`}
-                        >
-                          <div className="event-meta">
-                            <span>
-                              STEP {idx + 1} // {ev.type.toUpperCase()}
-                              {ev.tool_name ? ` (${ev.tool_name})` : ""}
-                            </span>
-                            <span>{ev.is_error ? "ERROR SIGNAL DETECTED" : "OK"}</span>
-                          </div>
-                          {ev.content && (
-                            <div style={{ whiteSpace: "pre-wrap", color: "#ecfff0" }}>
-                              {ev.content}
-                            </div>
-                          )}
-                          {ev.tool_calls && ev.tool_calls.length > 0 && (
-                            <div>
-                              {ev.tool_calls.map((tc, tci) => (
-                                <span key={tci} className="tool-call-badge">
-                                  [TOOL] {tc.name}({JSON.stringify(tc.arguments)})
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                    {/* VIRTUALIZED ACID-PUNK TERMINAL STAGE (react-window) */}
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        marginBottom: "8px",
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "11px",
+                        color: "#9dff00",
+                      }}
+                    >
+                      <span>
+                        DOM VIRTUALIZATION ACTIVE (<code>react-window</code>) //{" "}
+                        {virtualTerminalLines.length} LOG LINES BUFFERED (CONSTANT DOM MEMORY)
+                      </span>
+                      <span>
+                        SSE CHUNK STREAM:{" "}
+                        <strong style={{ color: "#39ff14" }}>
+                          {streamLines.length} LIVE CHUNKS
+                        </strong>
+                      </span>
+                    </div>
+
+                    <div
+                      className="trace-stream"
+                      style={{
+                        padding: 0,
+                        border: "2px solid #39ff14",
+                        background: "#050d08",
+                      }}
+                    >
+                      <VirtualList
+                        ref={virtualListRef}
+                        height={320}
+                        width="100%"
+                        itemCount={virtualTerminalLines.length}
+                        itemSize={30}
+                        itemData={virtualTerminalLines}
+                      >
+                        {VirtualTerminalRow}
+                      </VirtualList>
                     </div>
                   </section>
                 )}

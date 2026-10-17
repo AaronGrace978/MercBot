@@ -143,6 +143,34 @@ export interface AppTemplate {
   files: AppTemplateFile[];
 }
 
+export interface SpecCriterionCheck {
+  criterion: string;
+  target: string;
+  passed: boolean;
+}
+
+export interface SpecVerification {
+  passed: boolean;
+  summary: string;
+  checks: SpecCriterionCheck[];
+  spec_path: string;
+}
+
+export interface StreamChunkEvent {
+  type: "token" | "terminal_chunk" | "trace_event" | "spec_check" | "complete" | "connected" | "error";
+  content?: string;
+  step?: number;
+  event_type?: string;
+  tool_name?: string | null;
+  tool_calls?: ToolCall[];
+  is_error?: boolean;
+  passed?: boolean;
+  summary?: string;
+  result?: unknown;
+  error?: string;
+  timestamp?: number;
+}
+
 export interface BuiltAppArtifact {
   template_id: string;
   template_name: string;
@@ -158,6 +186,7 @@ export interface BuiltAppArtifact {
   custom_prompt: string;
   run_hint: string;
   preview_html?: string;
+  spec_verification?: SpecVerification | null;
 }
 
 export interface MercuryState {

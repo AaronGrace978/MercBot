@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import queue
+import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from mercury.demo import frontier_auth_fix, frontier_pytest_fix, lesser_auth_fail
@@ -29,6 +32,38 @@ from mercury.templates import (
 )
 
 
+class SSEBroadcaster:
+    """Thread-safe Server-Sent Events (SSE) broadcaster for chunked token and terminal streaming."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._subscribers: list[queue.Queue[dict[str, Any] | None]] = []
+
+    def subscribe(self) -> queue.Queue[dict[str, Any] | None]:
+        q: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=1024)
+        with self._lock:
+            self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: queue.Queue[dict[str, Any] | None]) -> None:
+        with self._lock:
+            if q in self._subscribers:
+                self._subscribers.remove(q)
+
+    def publish(self, event: dict[str, Any]) -> None:
+        with self._lock:
+            subs = list(self._subscribers)
+        for q in subs:
+            try:
+                q.put_nowait(event)
+            except queue.Full:
+                try:
+                    q.get_nowait()
+                    q.put_nowait(event)
+                except queue.Empty:
+                    pass
+
+
 class MercuryBridge:
     """Stateless/stateful controller backing both Tauri IPC commands and the local HTTP server."""
 
@@ -47,6 +82,7 @@ class MercuryBridge:
             default_model="gemini-4-argon-high",
             allow_writes=True,
         )
+        self.broadcaster = SSEBroadcaster()
         self.built_apps: list[dict[str, Any]] = []
         # Ensure initial seed traces exist so the dashboard is immediately alive
         if self.harness.stats()["traces"] == 0:
@@ -115,13 +151,30 @@ class MercuryBridge:
             "cards": cards,
         }
 
-    def build_app(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _make_stream_emitter(
+        self,
+        on_stream: Callable[[dict[str, Any]], None] | None = None,
+    ) -> Callable[[dict[str, Any]], None]:
+        def _emit(chunk: dict[str, Any]) -> None:
+            self.broadcaster.publish(chunk)
+            if on_stream is not None:
+                on_stream(chunk)
+
+        return _emit
+
+    def build_app(
+        self,
+        payload: dict[str, Any],
+        *,
+        on_stream: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         template_id = str(payload.get("template_id") or "auto").strip()
         project_name = str(payload.get("project_name") or "").strip()
         custom_prompt = str(payload.get("custom_prompt") or "").strip()
         model = str(payload.get("model") or "gemini-4-argon-high").strip()
         auto_launch = bool(payload.get("launch", False))
         output_root = self.workspace_root / "workspaces"
+        emitter = self._make_stream_emitter(on_stream)
 
         if template_id in ("auto", "prompt", "freeform", ""):
             inferred_tpl, inferred_title = infer_template_from_prompt(custom_prompt or project_name or "Custom App")
@@ -136,6 +189,7 @@ class MercuryBridge:
             custom_prompt=custom_prompt,
             model=model,
             output_root=output_root,
+            on_stream=emitter,
         )
         art_dict = artifact.as_dict()
         launch_info = None
@@ -148,7 +202,7 @@ class MercuryBridge:
                 )
             except Exception as exc:
                 launch_info = {"launched": False, "error": str(exc)}
-        return {
+        res = {
             "build": art_dict,
             "launch": launch_info,
             "trace": trace.model_dump(),
@@ -156,6 +210,8 @@ class MercuryBridge:
             "distilled_cards": [c.model_dump() for c in cards],
             "state": self.get_state(),
         }
+        emitter({"type": "complete", "kind": "build", "trace_id": trace.id, "timestamp": time.time()})
+        return res
 
     def launch_app(self, payload: dict[str, Any]) -> dict[str, Any]:
         slug = str(payload.get("project_slug") or payload.get("slug") or "").strip()
@@ -172,11 +228,17 @@ class MercuryBridge:
             "state": self.get_state(),
         }
 
-    def run_agent(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def run_agent(
+        self,
+        payload: dict[str, Any],
+        *,
+        on_stream: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         task = str(payload.get("task") or "Audit the Mercury tier classifier and verify frontier markers pass pytest").strip()
         model = str(payload.get("model") or "gemini-4-argon-high").strip()
         mode = str(payload.get("mode") or "auto").strip()
         api_keys = payload.get("api_keys") if isinstance(payload.get("api_keys"), dict) else None
+        emitter = self._make_stream_emitter(on_stream)
 
         result = self.runtime.run(
             task,
@@ -185,11 +247,14 @@ class MercuryBridge:
             api_keys=api_keys,
             inject_pack=True,
             auto_capture=True,
+            on_stream=emitter,
         )
-        return {
+        out = {
             "run": result.as_dict(),
             "state": self.get_state(),
         }
+        emitter({"type": "complete", "kind": "run", "trace_id": result.trace.id, "timestamp": time.time()})
+        return out
 
     def run_contrast(self, payload: dict[str, Any]) -> dict[str, Any]:
         teacher_model = str(payload.get("teacher_model") or "gemini-4-argon-high").strip()
@@ -254,10 +319,12 @@ def serve_http(
     store_path: str | Path = ".mercury",
     workspace_root: str | Path = ".",
 ) -> None:
-    """Start the local MercBot JSON API server."""
+    """Start the local MercBot JSON + Server-Sent Events (SSE) API server."""
     bridge = MercuryBridge(store_path=store_path, workspace_root=workspace_root)
 
     class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
         def _send_json(self, status: int, data: Any) -> None:
             body = json.dumps(data, default=str).encode("utf-8")
             self.send_response(status)
@@ -265,9 +332,27 @@ def serve_http(
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept")
             self.end_headers()
             self.wfile.write(body)
+            self.wfile.flush()
+
+        def _begin_sse(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Accept")
+            self.end_headers()
+
+        def _write_sse_event(self, event_name: str, payload: Any) -> None:
+            serialized = json.dumps(payload, default=str)
+            frame = f"event: {event_name}\ndata: {serialized}\n\n".encode("utf-8")
+            self.wfile.write(frame)
+            self.wfile.flush()
 
         def do_OPTIONS(self) -> None:  # noqa: N802
             self._send_json(200, {"ok": True})
@@ -286,6 +371,29 @@ def serve_http(
             if parsed.path == "/api/templates":
                 self._send_json(200, {"templates": [t.model_dump() for t in list_build_templates()]})
                 return
+            if parsed.path in ("/api/stream", "/api/events"):
+                qs = parse_qs(parsed.query)
+                once = qs.get("once", ["0"])[0] == "1"
+                self._begin_sse()
+                self._write_sse_event("ready", {"status": "online", "stream": "sse"})
+                if once:
+                    return
+                sub_q = bridge.broadcaster.subscribe()
+                try:
+                    while True:
+                        try:
+                            item = sub_q.get(timeout=10.0)
+                            if item is None:
+                                break
+                            ev_type = str(item.get("type") or "chunk")
+                            self._write_sse_event(ev_type, item)
+                        except queue.Empty:
+                            self._write_sse_event("ping", {"ts": time.time()})
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+                finally:
+                    bridge.broadcaster.unsubscribe(sub_q)
+                return
             self._send_json(404, {"error": f"Unknown endpoint {parsed.path}"})
 
         def do_POST(self) -> None:  # noqa: N802
@@ -296,11 +404,44 @@ def serve_http(
             except json.JSONDecodeError:
                 payload = {}
 
+            accept = (self.headers.get("Accept") or "").lower()
+            wants_sse = (
+                "text/event-stream" in accept
+                or bool(payload.get("stream"))
+                or self.path.endswith("/stream")
+            )
+
             try:
-                if self.path == "/api/run":
+                if self.path in ("/api/run", "/api/run/stream"):
+                    if wants_sse:
+                        self._begin_sse()
+                        self._write_sse_event("start", {"kind": "run", "task": payload.get("task", "")})
+
+                        def _stream_run_chunk(chunk: dict[str, Any]) -> None:
+                            try:
+                                self._write_sse_event(str(chunk.get("type") or "chunk"), chunk)
+                            except OSError:
+                                pass
+
+                        result = bridge.run_agent(payload, on_stream=_stream_run_chunk)
+                        self._write_sse_event("result", result)
+                        return
                     self._send_json(200, bridge.run_agent(payload))
                     return
-                if self.path == "/api/build":
+                if self.path in ("/api/build", "/api/build/stream"):
+                    if wants_sse:
+                        self._begin_sse()
+                        self._write_sse_event("start", {"kind": "build", "template_id": payload.get("template_id", "auto")})
+
+                        def _stream_build_chunk(chunk: dict[str, Any]) -> None:
+                            try:
+                                self._write_sse_event(str(chunk.get("type") or "chunk"), chunk)
+                            except OSError:
+                                pass
+
+                        result = bridge.build_app(payload, on_stream=_stream_build_chunk)
+                        self._write_sse_event("result", result)
+                        return
                     self._send_json(200, bridge.build_app(payload))
                     return
                 if self.path == "/api/launch":
@@ -320,9 +461,21 @@ def serve_http(
                     return
                 self._send_json(404, {"error": f"Unknown POST route {self.path}"})
             except FrontierOnlyError as exc:
-                self._send_json(400, {"error": str(exc), "code": "FRONTIER_ONLY"})
+                if wants_sse:
+                    try:
+                        self._write_sse_event("error", {"error": str(exc), "code": "FRONTIER_ONLY"})
+                    except OSError:
+                        pass
+                else:
+                    self._send_json(400, {"error": str(exc), "code": "FRONTIER_ONLY"})
             except Exception as exc:
-                self._send_json(500, {"error": str(exc)})
+                if wants_sse:
+                    try:
+                        self._write_sse_event("error", {"error": str(exc)})
+                    except OSError:
+                        pass
+                else:
+                    self._send_json(500, {"error": str(exc)})
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             return
@@ -339,8 +492,8 @@ def serve_http(
     orig_seed = bridge.seed_default_traces
 
     bridge.get_state = lambda: _with_lock(lock, orig_get_state)  # type: ignore[method-assign]
-    bridge.run_agent = lambda p: _with_lock(lock, orig_run_agent, p)  # type: ignore[method-assign]
-    bridge.build_app = lambda p: _with_lock(lock, orig_build_app, p)  # type: ignore[method-assign]
+    bridge.run_agent = lambda p, **kw: _with_lock(lock, lambda: orig_run_agent(p, **kw))  # type: ignore[method-assign]
+    bridge.build_app = lambda p, **kw: _with_lock(lock, lambda: orig_build_app(p, **kw))  # type: ignore[method-assign]
     bridge.launch_app = lambda p: _with_lock(lock, orig_launch_app, p)  # type: ignore[method-assign]
     bridge.run_contrast = lambda p: _with_lock(lock, orig_run_contrast, p)  # type: ignore[method-assign]
     bridge.compile_pack = lambda p: _with_lock(lock, orig_compile_pack, p)  # type: ignore[method-assign]
@@ -354,6 +507,64 @@ def serve_http(
         pass
     finally:
         server.server_close()
+
+
+def run_stdio_bridge_worker(
+    *,
+    store_path: str | Path = ".mercury",
+    workspace_root: str | Path = ".",
+) -> None:
+    """Persistent asynchronous stdio JSON-RPC worker process for desktop IPC delegation."""
+    bridge = MercuryBridge(store_path=store_path, workspace_root=workspace_root)
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        req_id: Any = None
+        try:
+            msg = json.loads(line)
+            req_id = msg.get("id")
+            action = str(msg.get("action") or "state")
+            payload = msg.get("payload") if isinstance(msg.get("payload"), dict) else {}
+            stream_enabled = bool(msg.get("stream", True))
+
+            def _emit_chunk(chunk: dict[str, Any]) -> None:
+                if stream_enabled:
+                    sys.stdout.write(
+                        json.dumps({"id": req_id, "stream_chunk": chunk}, default=str) + "\n"
+                    )
+                    sys.stdout.flush()
+
+            if action == "state":
+                res = bridge.get_state()
+            elif action == "run":
+                res = bridge.run_agent(payload, on_stream=_emit_chunk)
+            elif action == "build":
+                res = bridge.build_app(payload, on_stream=_emit_chunk)
+            elif action == "launch":
+                res = bridge.launch_app(payload)
+            elif action == "templates":
+                res = {"templates": [t.model_dump() for t in list_build_templates()]}
+            elif action == "contrast":
+                res = bridge.run_contrast(payload)
+            elif action == "pack":
+                res = bridge.compile_pack(payload)
+            elif action == "reinforce":
+                res = bridge.reinforce_card(payload)
+            elif action == "seed":
+                res = bridge.seed_default_traces()
+            else:
+                raise ValueError(f"Unknown bridge-worker action: {action}")
+
+            sys.stdout.write(
+                json.dumps({"id": req_id, "ok": True, "result": res}, default=str) + "\n"
+            )
+            sys.stdout.flush()
+        except Exception as exc:
+            sys.stdout.write(
+                json.dumps({"id": req_id, "ok": False, "error": str(exc)}, default=str) + "\n"
+            )
+            sys.stdout.flush()
 
 
 def _with_lock(lock: threading.Lock, fn: Any, *args: Any) -> Any:

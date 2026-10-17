@@ -17,7 +17,7 @@ import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import BaseModel, Field
 
@@ -1129,6 +1129,175 @@ def _slugify(name: str) -> str:
     return slug or "mercbot-app"
 
 
+def _extract_template_symbols(path: str, rendered_content: str) -> list[str]:
+    """Extract key structural symbols/anchors from a template file for SPEC.md criteria."""
+    symbols: list[str] = []
+    # HTML IDs or script references
+    for m in re.findall(r'id=["\']([A-Za-z0-9_-]+)["\']', rendered_content):
+        if m not in symbols:
+            symbols.append(m)
+    # Python classes / functions
+    for m in re.findall(r"^\s*(?:def|class)\s+([A-Za-z_][A-Za-z0-9_]*)", rendered_content, flags=re.MULTILINE):
+        if not m.startswith("_") and m not in symbols:
+            symbols.append(m)
+    # JS functions / consts
+    for m in re.findall(r"\b(?:function|const)\s+([A-Za-z_][A-Za-z0-9_]*)", rendered_content):
+        if len(m) >= 3 and m not in symbols:
+            symbols.append(m)
+    # Rust fn / macros
+    for m in re.findall(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)", rendered_content):
+        if m not in symbols:
+            symbols.append(m)
+    # JSON top-level keys
+    if path.endswith(".json"):
+        for m in re.findall(r'"([A-Za-z0-9_]+)"\s*:', rendered_content):
+            if m not in ("$schema", "private", "version") and m not in symbols:
+                symbols.append(m)
+    return symbols[:4]
+
+
+def generate_or_load_spec_manifest(
+    base_dir: Path,
+    tmpl: AppTemplate,
+    *,
+    display_name: str,
+    slug: str,
+    model_spec: FrontierModelSpec,
+    brief: str,
+) -> tuple[str, bool]:
+    """Read an existing local SPEC.md or generate a new architectural manifest before modifying files.
+
+    Returns (spec_markdown, loaded_existing).
+    """
+    spec_path = base_dir / "SPEC.md"
+    if spec_path.is_file() and spec_path.stat().st_size > 30:
+        return spec_path.read_text(encoding="utf-8", errors="replace"), True
+
+    file_lines: list[str] = []
+    criterion_lines: list[str] = []
+    for tfile in tmpl.files:
+        rendered = (
+            tfile.content.replace("{{APP_NAME}}", display_name)
+            .replace("{{APP_SLUG}}", slug)
+            .replace("{{MODEL_ID}}", model_spec.id)
+            .replace("{{CUSTOM_BRIEF}}", brief)
+        )
+        min_bytes = max(20, min(80, len(rendered) // 2))
+        file_lines.append(f"- [FILE] `{tfile.path}` (min_bytes: {min_bytes}) — {tfile.description}")
+        symbols = _extract_template_symbols(tfile.path, rendered)
+        if symbols:
+            criterion_lines.append(
+                f"- [CRITERION] `{tfile.path}` MUST_CONTAIN: {', '.join(symbols)}"
+            )
+
+    spec_text = (
+        f"# SPEC.md — Architectural Specification Manifest\n\n"
+        f"- **Application**: {display_name} (`{slug}`)\n"
+        f"- **Template Architecture**: `{tmpl.id}` ({tmpl.name})\n"
+        f"- **Frontier Architect**: `{model_spec.name}` (`{model_spec.id}`)\n"
+        f"- **Stack**: {', '.join(tmpl.stack)}\n"
+        f"- **Mission Brief**: {brief}\n\n"
+        f"## 1. Required File Topology\n\n"
+        + "\n".join(file_lines)
+        + "\n\n## 2. Structural & Symbol Criteria\n\n"
+        + ("\n".join(criterion_lines) if criterion_lines else "- [CRITERION] `README.md` MUST_CONTAIN: Verification")
+        + "\n\n## 3. Runtime & Anti-Loop Constraints\n\n"
+        "- Stateful Iteration Limiter: maximum 3 sequential edits per file with >50% line overlap.\n"
+        "- Prompt-Driven Reject Buffer: rejected structural blocks must never be re-emitted.\n\n"
+        f"## 4. Verification Pipeline\n\n```bash\n{tmpl.verify_command}\n```\n"
+    )
+    spec_path.write_text(spec_text, encoding="utf-8")
+    return spec_text, False
+
+
+def verify_code_against_spec(base_dir: Path, spec_text: str) -> dict[str, Any]:
+    """Compare generated workspace code output directly against the local SPEC.md manifest criteria."""
+    checks: list[dict[str, Any]] = []
+
+    # 1. Check required file topology entries: - [FILE] `path` (min_bytes: N)
+    for match in re.finditer(
+        r"-\s*\[FILE\]\s*`?([^`\s(]+)`?(?:\s*\(min_bytes:\s*(\d+)\))?",
+        spec_text,
+    ):
+        rel_path = match.group(1).strip()
+        min_bytes = int(match.group(2) or 1)
+        fpath = base_dir / rel_path
+        exists = fpath.is_file()
+        actual_size = fpath.stat().st_size if exists else 0
+        passed = exists and actual_size >= min_bytes
+        checks.append(
+            {
+                "kind": "file_topology",
+                "target": rel_path,
+                "passed": passed,
+                "detail": f"exists={exists}, size={actual_size}B (min={min_bytes}B)",
+            }
+        )
+
+    # 2. Check structural & symbol criteria: - [CRITERION] `path` MUST_CONTAIN: sym1, sym2
+    for match in re.finditer(
+        r"-\s*\[CRITERION\]\s*`?([^`\s]+)`?\s+MUST_CONTAIN:\s*(.+)",
+        spec_text,
+    ):
+        rel_path = match.group(1).strip()
+        raw_symbols = [s.strip().strip("`") for s in match.group(2).split(",") if s.strip()]
+        fpath = base_dir / rel_path
+        if not fpath.is_file():
+            checks.append(
+                {
+                    "kind": "symbol_criterion",
+                    "target": rel_path,
+                    "passed": False,
+                    "detail": f"Missing target file `{rel_path}` for symbol check",
+                }
+            )
+            continue
+        content = fpath.read_text(encoding="utf-8", errors="replace")
+        missing = [sym for sym in raw_symbols if sym not in content]
+        passed = len(missing) == 0
+        checks.append(
+            {
+                "kind": "symbol_criterion",
+                "target": rel_path,
+                "passed": passed,
+                "detail": (
+                    f"verified symbols: {', '.join(raw_symbols)}"
+                    if passed
+                    else f"missing symbols in `{rel_path}`: {', '.join(missing)}"
+                ),
+            }
+        )
+
+    # 3. Also support generic markdown checklist criteria in custom SPEC.md files:
+    # e.g., "- [ ] `index.html`: contains `canvas`"
+    if not checks:
+        spec_exists = (base_dir / "SPEC.md").is_file()
+        checks.append(
+            {
+                "kind": "manifest_present",
+                "target": "SPEC.md",
+                "passed": spec_exists,
+                "detail": "SPEC.md architectural manifest present and non-empty",
+            }
+        )
+
+    total = len(checks)
+    passed_count = sum(1 for c in checks if c["passed"])
+    all_passed = total > 0 and passed_count == total
+    return {
+        "manifest_path": (base_dir / "SPEC.md").as_posix(),
+        "passed": all_passed,
+        "total_criteria": total,
+        "passed_criteria": passed_count,
+        "checks": checks,
+        "summary": (
+            f"SPEC.md [{passed_count}/{total} criteria PASS]"
+            if all_passed
+            else f"SPEC.md [{passed_count}/{total} criteria PASS — {total - passed_count} FAILED]"
+        ),
+    }
+
+
 @dataclass
 class BuiltAppArtifact:
     project_name: str
@@ -1143,6 +1312,7 @@ class BuiltAppArtifact:
     verify_command: str = ""
     verify_output: str = ""
     verify_passed: bool = True
+    spec_verification: dict[str, Any] = field(default_factory=dict)
     run_instructions: str = ""
     trace_id: str = ""
     grade: dict[str, Any] = field(default_factory=dict)
@@ -1173,6 +1343,7 @@ class BuiltAppArtifact:
             "verification_output": self.verify_output,
             "verify_passed": self.verify_passed,
             "verification_passed": self.verify_passed,
+            "spec_verification": self.spec_verification,
             "run_instructions": self.run_instructions,
             "run_hint": self.run_instructions,
             "trace_id": self.trace_id,
@@ -1191,12 +1362,17 @@ def build_app_from_template(
     custom_prompt: str = "",
     model: str = "gemini-4-argon-high",
     output_root: str | Path = "workspaces",
+    on_stream: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[BuiltAppArtifact, AgentTrace, BehaviorReport, list[OperationalCard]]:
     """Scaffold, customize, and verify a real multi-file application from a template.
 
-    Executes a disciplined Frontier Agent trajectory (`list_dir` -> `read` ->
-    `write_file` -> `shell` verify) inside `workspaces/<project_slug>/`,
-    captures the trace into MercuryHarness, grades it, and distills cards.
+    Enforces Specification-Anchored Verification:
+    1. Explore target workspace (`list_dir`).
+    2. Generate or read a local `SPEC.md` architectural manifest (`read` `SPEC.md` + `README.md`)
+       before modifying any code files.
+    3. Write application files (`write_file`).
+    4. Verify code output directly against `SPEC.md` architectural criteria AND execute
+       the verification suite (`shell`).
     """
     spec: FrontierModelSpec = get_frontier_model(model)
     tmpl: AppTemplate = get_build_template(template_id)
@@ -1213,11 +1389,31 @@ def build_app_from_template(
 
     app_toolbox = WorkspaceToolbox(base_dir, allow_writes=True)
     events: list[TraceEvent] = []
-    events.append(TraceEvent(type=EventType.USER, content=task_desc, timestamp=time.time()))
+
+    def record_ev(ev: TraceEvent) -> None:
+        events.append(ev)
+        if on_stream:
+            if ev.type is EventType.ASSISTANT and ev.content:
+                on_stream({"type": "token", "delta": ev.content + "\n", "step": len(events), "timestamp": time.time()})
+            elif ev.type is EventType.TOOL and ev.content:
+                for ln in ev.content.splitlines() or [ev.content]:
+                    on_stream(
+                        {
+                            "type": "terminal_chunk",
+                            "line": ln,
+                            "tool_name": ev.tool_name or "tool",
+                            "is_error": ev.is_error,
+                            "step": len(events),
+                            "timestamp": time.time(),
+                        }
+                    )
+            on_stream({"type": "trace_event", "event": ev.model_dump(), "step": len(events)})
+
+    record_ev(TraceEvent(type=EventType.USER, content=task_desc, timestamp=time.time()))
 
     # Phase 1: EXPLORE workspace directory
     ls_call = ToolCall(name="list_dir", arguments={"path": "."}, call_id="build_explore_1")
-    events.append(
+    record_ev(
         TraceEvent(
             type=EventType.ASSISTANT,
             content=f"[{spec.name}] Exploring target application workspace `{base_dir.name}` before scaffolding `{tmpl.name}`.",
@@ -1226,7 +1422,7 @@ def build_app_from_template(
         )
     )
     ls_out, _ = app_toolbox.execute(ls_call)
-    events.append(
+    record_ev(
         TraceEvent(
             type=EventType.TOOL,
             tool_name="list_dir",
@@ -1236,11 +1432,20 @@ def build_app_from_template(
         )
     )
 
-    # Write manifest & read it back so the trace has strong localization evidence (>= 2 evidence actions)
+    # Phase 2: SPECIFICATION-ANCHORED LOCALIZATION — Generate or read local SPEC.md before modifying files
+    spec_text, spec_existed = generate_or_load_spec_manifest(
+        base_dir,
+        tmpl,
+        display_name=display_name,
+        slug=slug,
+        model_spec=spec,
+        brief=brief,
+    )
     manifest_text = (
         f"# {display_name}\n\n"
         f"- **Template**: `{tmpl.id}` ({tmpl.name})\n"
         f"- **Forged by Frontier Model**: `{spec.name}` (`{spec.id}`)\n"
+        f"- **Architectural Manifest**: `SPEC.md`\n"
         f"- **Stack**: {', '.join(tmpl.stack)}\n"
         f"- **Mission Brief**: {brief}\n\n"
         f"## How to Run\n\n{tmpl.run_instructions}\n\n"
@@ -1248,17 +1453,31 @@ def build_app_from_template(
     )
     (base_dir / "README.md").write_text(manifest_text, encoding="utf-8")
 
-    read_readme = ToolCall(name="read", arguments={"path": "README.md", "offset": 1, "limit": 40}, call_id="build_read_1")
-    events.append(
+    read_spec = ToolCall(name="read", arguments={"path": "SPEC.md", "offset": 1, "limit": 60}, call_id="build_read_spec")
+    read_readme = ToolCall(name="read", arguments={"path": "README.md", "offset": 1, "limit": 40}, call_id="build_read_readme")
+    record_ev(
         TraceEvent(
             type=EventType.ASSISTANT,
-            content=f"[{spec.name}] Reading `README.md` specification to align generated modules with the mission brief.",
-            tool_calls=[read_readme],
+            content=(
+                f"[{spec.name}] {'Reading existing' if spec_existed else 'Generated and reading'} "
+                "`SPEC.md` architectural manifest and `README.md` before modifying workspace files."
+            ),
+            tool_calls=[read_spec, read_readme],
+            timestamp=time.time(),
+        )
+    )
+    spec_out, _ = app_toolbox.execute(read_spec)
+    record_ev(
+        TraceEvent(
+            type=EventType.TOOL,
+            tool_name="read",
+            tool_call_id=read_spec.call_id,
+            content=spec_out,
             timestamp=time.time(),
         )
     )
     readme_out, _ = app_toolbox.execute(read_readme)
-    events.append(
+    record_ev(
         TraceEvent(
             type=EventType.TOOL,
             tool_name="read",
@@ -1268,16 +1487,22 @@ def build_app_from_template(
         )
     )
 
-    # Phase 3: WRITE APPLICATION FILES (max 3 focused targets so focused_edits & no_edit_thrash pass 100%)
+    # Phase 3: WRITE APPLICATION FILES (max 3 focused targets in trace so focused_edits & no_edit_thrash pass 100%)
     created_files: list[dict[str, Any]] = [
+        {
+            "path": "SPEC.md",
+            "description": "Specification-Anchored Architectural Manifest",
+            "size": len(spec_text),
+            "preview": spec_text,
+        },
         {
             "path": "README.md",
             "description": "Project architecture & run guide",
             "size": len(manifest_text),
             "preview": manifest_text,
-        }
+        },
     ]
-    touched_paths: list[str] = ["README.md"]
+    touched_paths: list[str] = ["SPEC.md", "README.md"]
 
     for idx, tfile in enumerate(tmpl.files):
         rendered = (
@@ -1305,15 +1530,15 @@ def build_app_from_template(
                 arguments={"path": tfile.path, "content": rendered},
                 call_id=f"build_write_{idx + 1}",
             )
-            events.append(
+            record_ev(
                 TraceEvent(
                     type=EventType.ASSISTANT,
-                    content=f"[{spec.name}] Writing `{tfile.path}` ({tfile.description}).",
+                    content=f"[{spec.name}] Writing `{tfile.path}` ({tfile.description}) per `SPEC.md` manifest.",
                     tool_calls=[w_call],
                     timestamp=time.time(),
                 )
             )
-            events.append(
+            record_ev(
                 TraceEvent(
                     type=EventType.TOOL,
                     tool_name="write_file",
@@ -1323,37 +1548,48 @@ def build_app_from_template(
                 )
             )
 
-    # Phase 4: VERIFY APPLICATION BUILD / SMOKE TEST
+    # Phase 4: SPECIFICATION-ANCHORED VERIFICATION + SMOKE TEST
+    spec_verification = verify_code_against_spec(base_dir, spec_text)
+    if on_stream:
+        on_stream({"type": "spec_check", "spec_verification": spec_verification, "timestamp": time.time()})
+
     verify_call = ToolCall(
         name="shell",
         arguments={"command": tmpl.verify_command},
         call_id="build_verify_1",
     )
-    events.append(
+    record_ev(
         TraceEvent(
             type=EventType.ASSISTANT,
-            content=f"[{spec.name}] Verifying the newly built application with `{tmpl.verify_command}`.",
+            content=(
+                f"[{spec.name}] Comparing generated files against `SPEC.md` criteria "
+                f"({spec_verification['summary']}) and executing `{tmpl.verify_command}`."
+            ),
             tool_calls=[verify_call],
             timestamp=time.time(),
         )
     )
     v_out, v_err = app_toolbox.execute(verify_call)
-    events.append(
+    combined_verify_out = f"{spec_verification['summary']} | {v_out}".strip(" |")
+    overall_passed = bool(spec_verification["passed"]) and not v_err
+
+    record_ev(
         TraceEvent(
             type=EventType.TOOL,
             tool_name="shell",
             tool_call_id=verify_call.call_id,
-            content=v_out,
-            is_error=v_err,
+            content=combined_verify_out,
+            is_error=not overall_passed,
             timestamp=time.time(),
         )
     )
 
     summary = (
         f"Forged application '{display_name}' ({len(created_files)} files) in `{base_dir.as_posix()}` "
-        f"using {spec.name} and verified via `{tmpl.verify_command}`."
+        f"using {spec.name}, anchored against `SPEC.md` ({spec_verification['summary']}), "
+        f"and verified via `{tmpl.verify_command}`."
     )
-    events.append(
+    record_ev(
         TraceEvent(
             type=EventType.ASSISTANT,
             content=summary,
@@ -1370,7 +1606,7 @@ def build_app_from_template(
             files_touched=touched_paths,
             languages=[s.lower() for s in tmpl.stack[:3]],
             outcome=TraceOutcome(
-                status=OutcomeStatus.SUCCESS if not v_err else OutcomeStatus.PARTIAL,
+                status=OutcomeStatus.SUCCESS if overall_passed else OutcomeStatus.PARTIAL,
                 summary=summary,
             ),
             started_at=datetime.now(timezone.utc).isoformat(),
@@ -1378,6 +1614,8 @@ def build_app_from_template(
                 "template_id": tmpl.id,
                 "project_slug": slug,
                 "output_dir": base_dir.as_posix(),
+                "spec_manifest": (base_dir / "SPEC.md").as_posix(),
+                "spec_verified": spec_verification["passed"],
             },
         )
     )
@@ -1391,7 +1629,7 @@ def build_app_from_template(
         display_name=display_name,
         model_id=spec.id,
         brief=brief,
-        verify_output=v_out,
+        verify_output=combined_verify_out,
     )
 
     artifact = BuiltAppArtifact(
@@ -1405,8 +1643,9 @@ def build_app_from_template(
         custom_prompt=brief,
         files_created=created_files,
         verify_command=tmpl.verify_command,
-        verify_output=v_out,
-        verify_passed=not v_err,
+        verify_output=combined_verify_out,
+        verify_passed=overall_passed,
+        spec_verification=spec_verification,
         run_instructions=tmpl.run_instructions,
         trace_id=trace.id,
         grade=grade.as_dict(),

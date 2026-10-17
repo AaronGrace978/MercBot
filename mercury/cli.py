@@ -124,6 +124,11 @@ def main(argv: list[str] | None = None) -> int:
         default="workspaces",
         help="Output workspace parent directory (default: workspaces)",
     )
+    build_cmd.add_argument(
+        "--spec",
+        default="",
+        help="Optional path to a local SPEC.md architectural manifest to anchor verification against",
+    )
     build_cmd.add_argument("--launch", action="store_true", help="Immediately launch the built application after verification")
     build_cmd.add_argument("--json", action="store_true", help="Print full build artifact as JSON")
 
@@ -151,6 +156,9 @@ def main(argv: list[str] | None = None) -> int:
         choices=("state", "run", "build", "launch", "templates", "contrast", "pack", "reinforce", "seed"),
     )
     bridge_cmd.add_argument("--payload", default="{}", help="JSON payload string")
+    bridge_cmd.add_argument("--stream", action="store_true", help="Stream NDJSON chunks before final result")
+
+    sub.add_parser("bridge-worker", help="Persistent asynchronous stdio JSON-RPC worker process for desktop IPC")
 
     args = parser.parse_args(argv)
     harness = MercuryHarness.init(args.store)
@@ -278,6 +286,17 @@ def main(argv: list[str] | None = None) -> int:
                 proj_name = inferred_name
 
         runtime = MercuryAgentRuntime(harness, store_path=args.store)
+        if args.spec:
+            spec_src = Path(args.spec)
+            if spec_src.is_file():
+                from mercury.templates import _slugify, get_build_template
+
+                tmpl_obj = get_build_template(tpl_id)
+                slug = _slugify(proj_name or tmpl_obj.name)
+                dest_dir = Path(args.output_dir).resolve() / slug
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                (dest_dir / "SPEC.md").write_text(spec_src.read_text(encoding="utf-8"), encoding="utf-8")
+
         res = runtime.build_template(
             tpl_id,
             project_name=proj_name,
@@ -292,10 +311,13 @@ def main(argv: list[str] | None = None) -> int:
             json.dump(res, sys.stdout, indent=2, default=str)
             sys.stdout.write("\n")
         else:
+            spec_ver = art.get("spec_verification") or {}
             print(f"FORGED APPLICATION: {art['project_name']} ({art['template_name']})")
             print(f"Output Dir : {art['output_dir']}")
             print(f"Model      : {art['model']} | Trace: {art['trace_id']}")
             print(f"Files      : {', '.join(art['files_written'])}")
+            if spec_ver:
+                print(f"SPEC.md    : {spec_ver.get('summary', 'VERIFIED')} ({spec_ver.get('manifest_path', 'SPEC.md')})")
             print(f"Verified   : {'PASS' if art['verification_passed'] else 'FAIL'}")
             print(f"Verify Out : {art['verification_output']}")
             print(f"Launch Cmd : mercury launch {art['project_slug']}")
@@ -340,12 +362,18 @@ def main(argv: list[str] | None = None) -> int:
         harness.close()
         bridge = MercuryBridge(store_path=args.store)
         payload = json.loads(args.payload) if args.payload else {}
+
+        def _emit_ndjson_chunk(chunk: dict) -> None:
+            if args.stream:
+                sys.stdout.write(json.dumps({"stream_chunk": chunk}, default=str) + "\n")
+                sys.stdout.flush()
+
         if args.action == "state":
             out = bridge.get_state()
         elif args.action == "run":
-            out = bridge.run_agent(payload)
+            out = bridge.run_agent(payload, on_stream=_emit_ndjson_chunk if args.stream else None)
         elif args.action == "build":
-            out = bridge.build_app(payload)
+            out = bridge.build_app(payload, on_stream=_emit_ndjson_chunk if args.stream else None)
         elif args.action == "launch":
             out = bridge.launch_app(payload)
         elif args.action == "templates":
@@ -360,6 +388,14 @@ def main(argv: list[str] | None = None) -> int:
             out = bridge.seed_default_traces()
         json.dump(out, sys.stdout, default=str)
         sys.stdout.write("\n")
+        sys.stdout.flush()
+        return 0
+
+    if args.command == "bridge-worker":
+        from mercury.server import run_stdio_bridge_worker
+
+        harness.close()
+        run_stdio_bridge_worker(store_path=args.store)
         return 0
 
     return 1

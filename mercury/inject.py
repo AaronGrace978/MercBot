@@ -20,16 +20,44 @@ class OperatingPack:
     cards: list[OperationalCard] = field(default_factory=list)
     scores: list[float] = field(default_factory=list)
     token_budget: int = 1400
+    rejected_pathways: list[str] = field(default_factory=list)
 
     @property
     def card_ids(self) -> list[str]:
         return [card.id for card in self.cards]
 
+    def all_rejected_pathways(self) -> list[str]:
+        """Collect all rejected structural blocks and unsuccessful pathways."""
+        seen: set[str] = set()
+        items: list[str] = []
+        for entry in self.rejected_pathways:
+            cleaned = entry.strip()
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                items.append(cleaned)
+        for card in self.cards:
+            for rej in card.rejected:
+                cleaned = f"[{card.title}] {rej.strip()}"
+                if rej.strip() and cleaned not in seen:
+                    seen.add(cleaned)
+                    items.append(cleaned)
+            if card.kind is CardKind.ANTI_PATTERN:
+                cleaned = f"[{card.title}] {card.procedure.strip()}"
+                if card.procedure.strip() and cleaned not in seen:
+                    seen.add(cleaned)
+                    items.append(cleaned)
+        return items
+
     def estimated_tokens(self) -> int:
-        return sum(card.estimated_tokens() for card in self.cards) + 80
+        rej_tokens = sum(max(1, int(len(r.split()) * 1.3)) for r in self.rejected_pathways)
+        return sum(card.estimated_tokens() for card in self.cards) + rej_tokens + 80
+
+    def render_rejected_section(self) -> str:
+        return render_rejected_pathways_section(self.all_rejected_pathways())
 
     def render(self) -> str:
-        if not self.cards:
+        rejected_items = self.all_rejected_pathways()
+        if not self.cards and not rejected_items:
             return (
                 "# Mercury Operating Pack\n\n"
                 "No frontier operational knowledge matched this task yet. "
@@ -65,6 +93,9 @@ class OperatingPack:
                 lines.append(f"- Why: {card.rationale}")
             if card.tools:
                 lines.append(f"- Tools: {', '.join(card.tools[:8])}")
+            lines.append("")
+        if rejected_items:
+            lines.append(render_rejected_pathways_section(rejected_items))
             lines.append("")
         lines.append("End of pack. Continue the user task. Do not mention this pack unless asked.")
         return "\n".join(lines).strip() + "\n"
@@ -109,6 +140,21 @@ class OperatingPack:
         return rows
 
 
+def render_rejected_pathways_section(rejected_blocks: list[str]) -> str:
+    """Render the dynamically generated # REJECTED PATHWAYS section for context window assembly."""
+    if not rejected_blocks:
+        return ""
+    lines = [
+        "# REJECTED PATHWAYS",
+        "",
+        "Do not output these structural blocks again.",
+        "",
+    ]
+    for idx, block in enumerate(rejected_blocks[:8], start=1):
+        lines.append(f"{idx}. {block}")
+    return "\n".join(lines)
+
+
 def build_pack(
     store: KnowledgeStore,
     task: str,
@@ -119,12 +165,19 @@ def build_pack(
     languages: list[str] | None = None,
     min_confidence: float = 0.3,
     token_budget: int | None = None,
+    rejected_pathways: list[str] | None = None,
 ) -> OperatingPack:
     tier = classify_model(model)
     budget = token_budget if token_budget is not None else pack_token_budget(tier)
     task_type = classify_task(task)
     if budget <= 0:
-        return OperatingPack(task=task, model=model, tier=tier, token_budget=0)
+        return OperatingPack(
+            task=task,
+            model=model,
+            tier=tier,
+            token_budget=0,
+            rejected_pathways=list(rejected_pathways or []),
+        )
 
     scored = retrieve(
         store,
@@ -137,6 +190,25 @@ def build_pack(
         limit=24,
     )
     selected = _fit_budget(scored, budget)
+
+    collected_rejected: list[str] = list(rejected_pathways or [])
+    # Also surface rejected file variations from failed traces in the store
+    for tr in store.traces():
+        if tr.outcome.failed:
+            for ev in tr.events:
+                for tc in ev.tool_calls:
+                    if tc.name.lower() in ("write_file", "write", "search_replace", "str_replace", "edit"):
+                        fpath = tc.arguments.get("path") or tc.arguments.get("file") or ""
+                        snippet = (
+                            tc.arguments.get("new_string")
+                            or tc.arguments.get("content")
+                            or tc.arguments.get("old_string")
+                            or ""
+                        )
+                        desc = f"`{fpath}` ({tc.name}): {str(snippet).strip()[:160]}" if snippet else f"`{fpath}` ({tc.name})"
+                        if fpath and desc not in collected_rejected:
+                            collected_rejected.append(desc)
+
     return OperatingPack(
         task=task,
         model=model,
@@ -144,6 +216,7 @@ def build_pack(
         cards=[item.card for item in selected],
         scores=[item.score for item in selected],
         token_budget=budget,
+        rejected_pathways=collected_rejected,
     )
 
 

@@ -15,6 +15,7 @@ Mercury Harness flywheel:
 
 from __future__ import annotations
 
+import difflib
 import fnmatch
 import re
 import subprocess
@@ -28,7 +29,7 @@ from mercury.distill import distill_trace
 from mercury.fingerprint import enrich_trace, error_signature, looks_like_error
 from mercury.grade import BehaviorReport, grade_trace
 from mercury.harness import MercuryHarness
-from mercury.inject import OperatingPack, build_pack
+from mercury.inject import OperatingPack, build_pack, render_rejected_pathways_section
 from mercury.models import (
     AgentTrace,
     EventType,
@@ -43,11 +44,54 @@ from mercury.phases import segment_phases
 from mercury.providers import (
     FrontierModelSpec,
     FrontierOnlyError,
+    NetworkDropError,
+    _is_network_drop_error,
     call_frontier_provider,
     get_frontier_model,
     has_live_credentials,
     list_frontier_models,
+    resolve_fallback_titan_spec,
 )
+
+
+class IterationLimitExceededError(Exception):
+    """Soft internal exception thrown when a file path undergoes >3 sequential edits with >50% line overlap."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        path: str = "",
+        sequential_edits: int = 0,
+        line_overlap: float = 0.0,
+        snippet: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.path = path
+        self.file_path = path
+        self.sequential_edits = sequential_edits
+        self.line_overlap = line_overlap
+        self.overlap_ratio = line_overlap
+        self.snippet = snippet
+
+
+SoftTrajectoryPivotError = IterationLimitExceededError
+
+
+def compute_line_overlap(lines_a: list[str], lines_b: list[str]) -> float:
+    """Compute line overlap ratio (0.0 to 1.0) between two file variations."""
+    norm_a = [ln.strip() for ln in lines_a if ln.strip()] or [ln.strip() for ln in lines_a]
+    norm_b = [ln.strip() for ln in lines_b if ln.strip()] or [ln.strip() for ln in lines_b]
+    if not norm_a and not norm_b:
+        return 1.0
+    if not norm_a or not norm_b:
+        return 0.0
+    set_a = set(norm_a)
+    set_b = set(norm_b)
+    denom = max(1, min(len(set_a), len(set_b)))
+    set_overlap = len(set_a & set_b) / denom
+    seq_overlap = difflib.SequenceMatcher(None, norm_a, norm_b).ratio()
+    return max(set_overlap, seq_overlap)
 
 RUNTIME_TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
@@ -320,6 +364,7 @@ class AgentRunResult:
     distilled_cards: list[OperationalCard] = field(default_factory=list)
     injected_pack: OperatingPack | None = None
     recovery_injections: list[str] = field(default_factory=list)
+    rejected_pathways: list[str] = field(default_factory=list)
     mode_used: str = "synth"
     final_response: str = ""
     duration_ms: int = 0
@@ -346,11 +391,13 @@ class AgentRunResult:
                 "tier": self.injected_pack.tier.value,
                 "card_ids": self.injected_pack.card_ids,
                 "cards": [c.model_dump() for c in self.injected_pack.cards],
+                "rejected_pathways": self.injected_pack.all_rejected_pathways(),
                 "markdown": self.injected_pack.render(),
             }
             if self.injected_pack
             else None,
             "recovery_injections": self.recovery_injections,
+            "rejected_pathways": self.rejected_pathways,
             "phases": phases,
             "mode_used": self.mode_used,
             "final_response": self.final_response,
@@ -370,12 +417,166 @@ class MercuryAgentRuntime:
         workspace_root: str | Path = ".",
         default_model: str = "gemini-4-argon-high",
         allow_writes: bool = True,
+        max_sequential_overlapping_edits: int = 3,
+        overlap_threshold: float = 0.50,
     ) -> None:
         # Validate default_model is strictly frontier at init time
         self.default_model_spec = get_frontier_model(default_model)
         self.harness = harness or MercuryHarness.init(store_path)
         self.workspace_root = Path(workspace_root).resolve()
         self.toolbox = WorkspaceToolbox(self.workspace_root, allow_writes=allow_writes)
+        # Stateful Iteration Limiter & Prompt-Driven Reject Buffer
+        self.max_sequential_overlapping_edits = max_sequential_overlapping_edits
+        self.overlap_threshold = overlap_threshold
+        self.edit_history: dict[str, list[dict[str, Any]]] = {}
+        self._last_edited_path: str | None = None
+        self.rejected_pathways: list[str] = []
+        self.recovery_injections: list[str] = []
+
+    def reset_iteration_state(self) -> None:
+        """Reset sequential edit tracking for a fresh trajectory while preserving rejected pathways."""
+        self.edit_history.clear()
+        self._last_edited_path = None
+
+    def record_rejected_pathway(self, path: str, structural_block: str, reason: str = "") -> str:
+        """Record an unsuccessful file variation into the prompt-driven reject buffer."""
+        norm_path = Path(path).as_posix().lstrip("./") if path else "workspace"
+        preview = structural_block.strip()[:320]
+        label = f"File `{norm_path}`"
+        if reason:
+            label += f" ({reason})"
+        entry = f"{label}: `{preview}`" if preview else label
+        if entry not in self.rejected_pathways:
+            self.rejected_pathways.append(entry)
+        return entry
+
+    def record_file_edit(self, path: str, new_content: str) -> dict[str, Any]:
+        """Track sequential edits on `path` and raise IterationLimitExceededError if >3 sequential edits have >50% line overlap."""
+        norm_path = Path(path).as_posix().lstrip("./")
+        curr_lines = new_content.splitlines() or [new_content]
+        history = self.edit_history.setdefault(norm_path, [])
+
+        is_sequential = (self._last_edited_path == norm_path or self._last_edited_path is None) and len(history) > 0
+        if is_sequential and history:
+            prev_entry = history[-1]
+            overlap = compute_line_overlap(prev_entry["lines"], curr_lines)
+            if overlap > self.overlap_threshold:
+                seq_count = int(prev_entry["sequential_count"]) + 1
+            else:
+                seq_count = 1
+        else:
+            overlap = compute_line_overlap(history[-1]["lines"], curr_lines) if history else 0.0
+            seq_count = 1
+
+        self._last_edited_path = norm_path
+        record = {
+            "path": norm_path,
+            "content": new_content,
+            "lines": curr_lines,
+            "overlap": round(overlap, 4),
+            "sequential_count": seq_count,
+            "timestamp": time.time(),
+        }
+        history.append(record)
+
+        if seq_count > self.max_sequential_overlapping_edits and overlap > self.overlap_threshold:
+            self.record_rejected_pathway(
+                norm_path,
+                new_content,
+                reason=f"sequential edit #{seq_count} with {overlap:.0%} line overlap",
+            )
+            raise IterationLimitExceededError(
+                f"Stateful iteration limiter triggered on `{norm_path}`: {seq_count} sequential edits "
+                f"with {overlap:.0%} line overlap (threshold: >{self.max_sequential_overlapping_edits} edits, "
+                f">{self.overlap_threshold:.0%} overlap). Alter trajectory immediately.",
+                path=norm_path,
+                sequential_edits=seq_count,
+                line_overlap=overlap,
+                snippet=new_content[:320],
+            )
+        return record
+
+    def assemble_system_prompt(
+        self,
+        spec: FrontierModelSpec,
+        task: str,
+        *,
+        pack: OperatingPack | None = None,
+        rejected_pathways: list[str] | None = None,
+    ) -> str:
+        """Assemble context window system prompt with OperatingPack and # REJECTED PATHWAYS buffer."""
+        system_prompt = (
+            f"You are {spec.name} ({spec.id}), a frontier coding agent operating inside the "
+            f"Mercury Harness runtime (workspace root: `{self.workspace_root.as_posix()}`). "
+            "You can build full applications, scaffold multi-file projects, fix bugs, and run tests. "
+            "Always follow frontier operating discipline:\n"
+            "1. Explore first with `list_dir`, `glob`, or `grep` before reading or writing files.\n"
+            "2. Localize by reading existing files or checking target paths with `read`.\n"
+            "3. Build/scaffold new files with `write_file` or patch existing files with `search_replace`.\n"
+            "4. Verify after creating or editing files by running a real command or test with `shell`.\n"
+            "5. If a tool fails, change approach — never repeat the identical call unchanged."
+        )
+        if pack and pack.cards:
+            system_prompt += "\n\n" + pack.render()
+
+        combined_rejected: list[str] = []
+        for source in (
+            self.rejected_pathways,
+            rejected_pathways or [],
+            pack.all_rejected_pathways() if pack else [],
+        ):
+            for item in source:
+                if item and item not in combined_rejected:
+                    combined_rejected.append(item)
+
+        if combined_rejected and "# REJECTED PATHWAYS" not in system_prompt:
+            system_prompt += "\n\n" + render_rejected_pathways_section(combined_rejected)
+        elif combined_rejected:
+            # Ensure any newly recorded runtime rejected pathways are appended
+            extra = [r for r in combined_rejected if r not in system_prompt]
+            if extra:
+                system_prompt += "\n" + "\n".join(f"- {r}" for r in extra)
+
+        return system_prompt
+
+    def _execute_tool_with_guard(self, tc: ToolCall) -> tuple[str, bool, IterationLimitExceededError | None]:
+        """Execute a tool call while enforcing the Stateful Iteration Limiter and Reject Buffer."""
+        name = tc.name.lower().strip()
+        args = tc.arguments or {}
+        if name in ("write_file", "write", "create_file", "search_replace", "str_replace", "edit"):
+            rel_path = str(args.get("path") or args.get("file") or args.get("file_path") or "").strip()
+            candidate_text = str(
+                args.get("content")
+                if args.get("content") is not None
+                else args.get("new_string")
+                if args.get("new_string") is not None
+                else args.get("new")
+                if args.get("new") is not None
+                else args.get("contents") or ""
+            )
+            if rel_path:
+                try:
+                    self.record_file_edit(rel_path, candidate_text)
+                except IterationLimitExceededError as loop_exc:
+                    err_msg = (
+                        f"ITERATION_LIMIT_EXCEEDED: {loop_exc}\n"
+                        "# REJECTED PATHWAYS\n"
+                        "Do not output these structural blocks again.\n"
+                        f"Rejected block on `{loop_exc.path}`: `{loop_exc.snippet}`"
+                    )
+                    self.recovery_injections.append(str(loop_exc))
+                    return err_msg, True, loop_exc
+        else:
+            # Non-edit tool breaks sequential edit streak on the previous file path
+            self._last_edited_path = None
+
+        output, is_err = self.toolbox.execute(tc)
+        if is_err and name in ("write_file", "write", "create_file", "search_replace", "str_replace", "edit"):
+            rel_path = str(args.get("path") or args.get("file") or args.get("file_path") or "").strip()
+            bad_block = str(args.get("old_string") or args.get("new_string") or args.get("content") or "")
+            if rel_path:
+                self.record_rejected_pathway(rel_path, bad_block, reason=output[:120])
+        return output, is_err, None
 
     def available_models(self, provider: str | None = None) -> list[FrontierModelSpec]:
         """List strictly frontier models available to the runtime."""
@@ -389,6 +590,7 @@ class MercuryAgentRuntime:
         custom_prompt: str = "",
         model: str | None = None,
         output_root: str | Path = "workspaces",
+        on_stream: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """Scaffold, customize, and verify an application from a build template."""
         from mercury.templates import build_app_from_template
@@ -401,6 +603,7 @@ class MercuryAgentRuntime:
             custom_prompt=custom_prompt,
             model=target_model,
             output_root=output_root,
+            on_stream=on_stream,
         )
         return {
             "artifact": artifact.as_dict(),
@@ -421,6 +624,7 @@ class MercuryAgentRuntime:
         inject_pack: bool = True,
         auto_capture: bool = True,
         on_event: Callable[[TraceEvent], None] | None = None,
+        on_stream: Callable[[dict[str, Any]], None] | None = None,
     ) -> AgentRunResult:
         """Execute a frontier agent run on `task` and feed the trace into the Mercury flywheel."""
         start_ts = time.perf_counter()
@@ -444,6 +648,7 @@ class MercuryAgentRuntime:
                 model=spec.id,
                 min_confidence=self.harness.min_confidence,
                 token_budget=2400,
+                rejected_pathways=list(self.rejected_pathways),
             )
 
         # If the user task is an application build request, scaffold & verify a real app in workspaces/
@@ -467,6 +672,7 @@ class MercuryAgentRuntime:
                 custom_prompt=task,
                 model=spec.id,
                 output_root=self.workspace_root / "workspaces",
+                on_stream=on_stream,
             )
             elapsed_ms = max(1, int((time.perf_counter() - start_ts) * 1000))
             return AgentRunResult(
@@ -476,6 +682,7 @@ class MercuryAgentRuntime:
                 distilled_cards=distilled,
                 injected_pack=pack,
                 recovery_injections=[],
+                rejected_pathways=list(self.rejected_pathways),
                 mode_used="forge",
                 final_response=(
                     f"Built & verified application '{artifact.project_name}' in `{artifact.output_dir}` "
@@ -500,26 +707,38 @@ class MercuryAgentRuntime:
                     max_steps=max_steps,
                     api_keys=api_keys,
                     on_event=on_event,
+                    on_stream=on_stream,
                 )
-                mode_used = "live"
+                mode_used = str(trace.metadata.get("mode") or "live")
             except Exception as live_exc:
-                if mode == "live":
+                # Offline Mode Enforcement: route network drops seamlessly to Ollama Cloud / Local Titan fallback
+                if mode == "live" and not _is_network_drop_error(live_exc):
                     raise
-                # Graceful fallback to synth frontier loop if auto mode endpoint is unreachable
+                titan_spec = resolve_fallback_titan_spec(spec)
+                fallback_msg = (
+                    f"Offline Mode Enforcement: routed `{spec.id}` network drop ({live_exc}) "
+                    f"to fallback Titan layer `{titan_spec.id}`."
+                )
                 trace, final_text, recoveries = self._run_synth_loop(
-                    spec=spec,
+                    spec=titan_spec,
                     task=task,
                     pack=pack,
                     on_event=on_event,
-                    fallback_note=f"Live endpoint fallback ({live_exc}); executed local frontier trajectory.",
+                    on_stream=on_stream,
+                    fallback_note=fallback_msg,
                 )
-                mode_used = "synth"
+                recoveries.insert(0, fallback_msg)
+                trace.metadata["offline_fallback"] = True
+                trace.metadata["primary_model"] = spec.id
+                trace.metadata["fallback_model"] = titan_spec.id
+                mode_used = "offline_titan_fallback" if mode == "live" else "synth"
         else:
             trace, final_text, recoveries = self._run_synth_loop(
                 spec=spec,
                 task=task,
                 pack=pack,
                 on_event=on_event,
+                on_stream=on_stream,
             )
             mode_used = "synth"
 
@@ -538,10 +757,51 @@ class MercuryAgentRuntime:
             distilled_cards=distilled,
             injected_pack=pack,
             recovery_injections=recoveries,
+            rejected_pathways=list(self.rejected_pathways),
             mode_used=mode_used,
             final_response=final_text,
             duration_ms=elapsed_ms,
         )
+
+    @staticmethod
+    def _emit_stream_chunks(
+        on_stream: Callable[[dict[str, Any]], None] | None,
+        *,
+        kind: str,
+        text: str,
+        step: int = 0,
+        tool_name: str | None = None,
+        is_error: bool = False,
+    ) -> None:
+        """Stream model tokens or terminal output lines bit-by-bit to eliminate buffer clumps."""
+        if not on_stream or not text:
+            return
+        if kind == "token":
+            # Stream token words in compact slices
+            words = re.findall(r"\S+\s*", text)
+            chunk_size = 4
+            for i in range(0, len(words), chunk_size):
+                piece = "".join(words[i : i + chunk_size])
+                on_stream(
+                    {
+                        "type": "token",
+                        "delta": piece,
+                        "step": step,
+                        "timestamp": time.time(),
+                    }
+                )
+        else:
+            for line in text.splitlines() or [text]:
+                on_stream(
+                    {
+                        "type": "terminal_chunk",
+                        "line": line,
+                        "tool_name": tool_name or "shell",
+                        "is_error": is_error,
+                        "step": step,
+                        "timestamp": time.time(),
+                    }
+                )
 
     def _run_live_loop(
         self,
@@ -552,20 +812,9 @@ class MercuryAgentRuntime:
         max_steps: int,
         api_keys: dict[str, str] | None,
         on_event: Callable[[TraceEvent], None] | None,
+        on_stream: Callable[[dict[str, Any]], None] | None = None,
     ) -> tuple[AgentTrace, str, list[str]]:
-        system_prompt = (
-            f"You are {spec.name} ({spec.id}), a frontier coding agent operating inside the "
-            f"Mercury Harness runtime (workspace root: `{self.workspace_root.as_posix()}`). "
-            "You can build full applications, scaffold multi-file projects, fix bugs, and run tests. "
-            "Always follow frontier operating discipline:\n"
-            "1. Explore first with `list_dir`, `glob`, or `grep` before reading or writing files.\n"
-            "2. Localize by reading existing files or checking target paths with `read`.\n"
-            "3. Build/scaffold new files with `write_file` or patch existing files with `search_replace`.\n"
-            "4. Verify after creating or editing files by running a real command or test with `shell`.\n"
-            "5. If a tool fails, change approach — never repeat the identical call unchanged."
-        )
-        if pack and pack.cards:
-            system_prompt += "\n\n" + pack.render()
+        system_prompt = self.assemble_system_prompt(spec, task, pack=pack)
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
@@ -573,6 +822,8 @@ class MercuryAgentRuntime:
         ]
         events: list[TraceEvent] = []
         recoveries: list[str] = []
+        offline_fallback_used = False
+        fallback_model_used = ""
 
         user_ev = TraceEvent(type=EventType.USER, content=task, timestamp=time.time())
         events.append(user_ev)
@@ -580,13 +831,26 @@ class MercuryAgentRuntime:
             on_event(user_ev)
 
         final_text = ""
-        for _step in range(max_steps):
+        for step_idx in range(max_steps):
             turn = call_frontier_provider(
                 spec,
                 messages,
                 RUNTIME_TOOLS_SCHEMA,
                 api_keys=api_keys,
+                allow_offline_fallback=True,
             )
+            if turn.raw and turn.raw.get("fallback_routed"):
+                offline_fallback_used = True
+                fallback_model_used = str(turn.raw.get("fallback_model") or turn.model)
+                note = (
+                    f"Offline Mode Enforcement: routed `{spec.id}` to `{fallback_model_used}` "
+                    f"({turn.raw.get('fallback_layer', 'ollama_titan')})"
+                )
+                if note not in recoveries:
+                    recoveries.append(note)
+
+            self._emit_stream_chunks(on_stream, kind="token", text=turn.content, step=step_idx + 1)
+
             asst_ev = TraceEvent(
                 type=EventType.ASSISTANT,
                 content=turn.content,
@@ -610,7 +874,15 @@ class MercuryAgentRuntime:
                 break
 
             for tc in turn.tool_calls:
-                output, is_err = self.toolbox.execute(tc)
+                output, is_err, loop_exc = self._execute_tool_with_guard(tc)
+                self._emit_stream_chunks(
+                    on_stream,
+                    kind="terminal_chunk",
+                    text=output,
+                    step=step_idx + 1,
+                    tool_name=tc.name,
+                    is_error=is_err,
+                )
                 tool_ev = TraceEvent(
                     type=EventType.TOOL,
                     content=output,
@@ -623,8 +895,15 @@ class MercuryAgentRuntime:
                 if on_event:
                     on_event(tool_ev)
 
-                # Mid-run Mercury recovery injection when a tool errors
+                if loop_exc is not None:
+                    recoveries.append(
+                        f"Stateful Iteration Limiter soft exception on `{loop_exc.path}` "
+                        f"({loop_exc.sequential_edits} edits, {loop_exc.line_overlap:.0%} overlap) — forced trajectory pivot"
+                    )
+
+                # Refresh system prompt with updated # REJECTED PATHWAYS whenever a tool errors
                 if is_err:
+                    messages[0]["content"] = self.assemble_system_prompt(spec, task, pack=pack)
                     sig = error_signature(output) or f"{tc.name} error"
                     rec_pack = build_pack(
                         self.harness.store,
@@ -633,6 +912,7 @@ class MercuryAgentRuntime:
                         model=spec.id,
                         error_signature=sig,
                         token_budget=900,
+                        rejected_pathways=list(self.rejected_pathways),
                     )
                     if rec_pack.cards:
                         rec_titles = ", ".join(c.title for c in rec_pack.cards[:2])
@@ -655,6 +935,15 @@ class MercuryAgentRuntime:
         if not final_text:
             final_text = f"Completed frontier trajectory with {spec.name}."
 
+        meta: dict[str, Any] = {
+            "provider": spec.provider.value,
+            "mode": "offline_titan_fallback" if offline_fallback_used else "live",
+        }
+        if offline_fallback_used:
+            meta["offline_fallback"] = True
+            meta["primary_model"] = spec.id
+            meta["fallback_model"] = fallback_model_used
+
         trace = AgentTrace(
             id=trace_id_for(spec.id, task, str(time.time())),
             model=spec.id,
@@ -665,7 +954,7 @@ class MercuryAgentRuntime:
                 summary=final_text[:280],
             ),
             started_at=datetime.now(timezone.utc).isoformat(),
-            metadata={"provider": spec.provider.value, "mode": "live"},
+            metadata=meta,
         )
         return trace, final_text, recoveries
 
@@ -676,6 +965,7 @@ class MercuryAgentRuntime:
         task: str,
         pack: OperatingPack | None,
         on_event: Callable[[TraceEvent], None] | None,
+        on_stream: Callable[[dict[str, Any]], None] | None = None,
         fallback_note: str | None = None,
     ) -> tuple[AgentTrace, str, list[str]]:
         """Execute a deterministic frontier agent trajectory using real workspace tools."""
@@ -686,6 +976,19 @@ class MercuryAgentRuntime:
             events.append(ev)
             if on_event:
                 on_event(ev)
+            if on_stream:
+                if ev.type is EventType.ASSISTANT and ev.content:
+                    self._emit_stream_chunks(on_stream, kind="token", text=ev.content, step=len(events))
+                elif ev.type is EventType.TOOL and ev.content:
+                    self._emit_stream_chunks(
+                        on_stream,
+                        kind="terminal_chunk",
+                        text=ev.content,
+                        step=len(events),
+                        tool_name=ev.tool_name,
+                        is_error=ev.is_error,
+                    )
+                on_stream({"type": "trace_event", "event": ev.model_dump(), "step": len(events)})
 
         emit(TraceEvent(type=EventType.USER, content=task, timestamp=time.time()))
 
