@@ -811,7 +811,7 @@ body {
 /* ── DISTILLED OPERATIONAL CARDS DECK ──────────────────────────────────── */
 .cards-deck-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
   gap: 16px;
 }
 
@@ -823,6 +823,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .op-card.kind-contrast,
@@ -838,8 +841,18 @@ body {
 .op-card-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+}
+
+.op-card-header > span:last-child {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: right;
 }
 
 .kind-stamp {
@@ -850,6 +863,9 @@ body {
   padding: 2px 8px;
   background: var(--acid-green);
   color: #050c07;
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .kind-stamp.contrast,
@@ -868,6 +884,10 @@ body {
   font-size: 15px;
   color: var(--text-main);
   letter-spacing: 0.03em;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .op-card-body {
@@ -876,6 +896,10 @@ body {
   color: var(--text-dim);
   line-height: 1.45;
   white-space: pre-wrap;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .branch-box {
@@ -887,27 +911,43 @@ body {
   border: 1px solid var(--border-dark);
   font-family: var(--font-mono);
   font-size: 11px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .branch-chose {
   color: var(--acid-green);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .branch-rejected {
   color: var(--bio-pink);
   text-decoration: line-through;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .op-card-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-top: auto;
   padding-top: 8px;
   border-top: 1px dashed var(--border-dark);
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-dim);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .code-preview {
