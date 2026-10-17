@@ -1,6 +1,6 @@
 [package]
 name = "mercbot-acid-runtime"
-version = "0.3.1"
+version = "0.3.2"
 description = "MercBot // Punk Frontier Agent Runtime powered by Mercury Harness"
 authors = ["Aaron Grace <aarongrace978@gmail.com>"]
 edition = "2021"
