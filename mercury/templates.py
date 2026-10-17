@@ -1045,17 +1045,17 @@ def _compile_preview_html(
         if css_file.exists():
             css_text = css_file.read_text(encoding="utf-8", errors="replace")
             raw_html = re.sub(
-                r'<link[^>]+href=["\']style\.css["\'][^>]*/?>',
+                r'<link[^>]+href=["\'](?:\./)?style\.css["\'][^>]*/?>',
                 lambda _m, _css=css_text: f"<style>\n{_css}\n</style>",
                 raw_html,
                 flags=re.IGNORECASE,
             )
-        for js_name in ("synth.js", "app.js", "main.js"):
+        for js_name in ("synth.js", "app.js", "main.js", "script.js"):
             js_file = html_file.parent / js_name
             if js_file.exists():
                 js_text = js_file.read_text(encoding="utf-8", errors="replace")
                 raw_html = re.sub(
-                    rf'<script[^>]+src=["\']{re.escape(js_name)}["\'][^>]*>\s*</script>',
+                    rf'<script[^>]+src=["\'](?:\./)?{re.escape(js_name)}["\'][^>]*>\s*</script>',
                     lambda _m, _js=js_text: f"<script>\n{_js}\n</script>",
                     raw_html,
                     flags=re.IGNORECASE,
@@ -1384,7 +1384,16 @@ def build_app_from_template(
     spec: FrontierModelSpec = get_frontier_model(model)
     tmpl: AppTemplate = get_build_template(template_id)
 
-    display_name = project_name.strip() or tmpl.name
+    raw_proj_name = project_name.strip()
+    if (
+        (not raw_proj_name or raw_proj_name == tmpl.name)
+        and custom_prompt.strip()
+        and custom_prompt.strip() != tmpl.tagline
+    ):
+        _, inferred_title = infer_template_from_prompt(custom_prompt)
+        display_name = inferred_title or raw_proj_name or tmpl.name
+    else:
+        display_name = raw_proj_name or tmpl.name
     slug = _slugify(display_name)
     base_dir = Path(output_root).resolve() / slug
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -1681,70 +1690,153 @@ def build_app_from_template(
     return artifact, trace, grade, cards
 
 
+def _workspace_last_modified(sub: Path) -> float:
+    """Return the latest modification timestamp across source files in a workspace directory."""
+    if not sub.exists():
+        return 0.0
+    latest = sub.stat().st_mtime
+    try:
+        for f in sub.rglob("*"):
+            if f.is_file() and f.name not in ("bundle.preview.html", "mercbot.app.json") and "__pycache__" not in f.parts:
+                latest = max(latest, f.stat().st_mtime)
+    except Exception:
+        pass
+    return latest
+
+
+def sync_workspace_manifest(sub: Path, *, force_recompile: bool = False) -> dict[str, Any] | None:
+    """Synchronize a workspace's `bundle.preview.html` and `mercbot.app.json` with live files on disk."""
+    if not sub.exists() or not sub.is_dir():
+        return None
+
+    files_written: list[str] = []
+    file_contents: dict[str, str] = {}
+    latest_source_mtime = 0.0
+
+    for f in sorted(sub.rglob("*")):
+        if f.is_file() and f.name not in ("mercbot.app.json", "bundle.preview.html") and "__pycache__" not in f.parts:
+            rel = f.relative_to(sub).as_posix()
+            files_written.append(rel)
+            try:
+                file_contents[rel] = f.read_text(encoding="utf-8", errors="replace")
+                latest_source_mtime = max(latest_source_mtime, f.stat().st_mtime)
+            except Exception:
+                file_contents[rel] = ""
+
+    if not files_written:
+        return None
+
+    manifest = sub / "mercbot.app.json"
+    bundle_file = sub / "bundle.preview.html"
+    bundle_mtime = bundle_file.stat().st_mtime if bundle_file.exists() else 0.0
+
+    if manifest.exists():
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            cached_contents = data.get("file_contents") or {}
+            files_changed = cached_contents != file_contents
+            needs_recompile = (
+                force_recompile
+                or files_changed
+                or not bundle_file.exists()
+                or latest_source_mtime > bundle_mtime
+                or not data.get("preview_html")
+            )
+            if needs_recompile:
+                preview_html = _compile_preview_html(
+                    sub,
+                    display_name=data.get("project_name", sub.name.replace("-", " ").title()),
+                    model_id=data.get("model", "gemini-4-argon-high"),
+                    brief=data.get("custom_prompt", ""),
+                    verify_output=data.get("verification_output", "PASS"),
+                )
+                data["preview_html"] = preview_html
+                data["file_contents"] = file_contents
+                data["files_written"] = files_written
+                if isinstance(data.get("files_created"), list):
+                    updated_created = []
+                    seen_paths = set()
+                    for entry in data["files_created"]:
+                        p_rel = entry.get("path")
+                        if p_rel in file_contents:
+                            seen_paths.add(p_rel)
+                            txt = file_contents[p_rel]
+                            updated_created.append(
+                                {
+                                    **entry,
+                                    "size": len(txt.encode("utf-8")),
+                                    "preview": "\n".join(txt.splitlines()[:35]),
+                                }
+                            )
+                    for rel_path in files_written:
+                        if rel_path not in seen_paths:
+                            txt = file_contents[rel_path]
+                            updated_created.append(
+                                {
+                                    "path": rel_path,
+                                    "description": "Workspace source file",
+                                    "size": len(txt.encode("utf-8")),
+                                    "preview": "\n".join(txt.splitlines()[:35]),
+                                }
+                            )
+                    data["files_created"] = updated_created
+                try:
+                    manifest.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+                except Exception:
+                    pass
+            elif bundle_file.exists():
+                try:
+                    data["preview_html"] = bundle_file.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+            return data
+        except Exception:
+            pass
+
+    preview_html = _compile_preview_html(
+        sub,
+        display_name=sub.name.replace("-", " ").title(),
+        model_id="gemini-4-argon-high",
+        brief="Forged application workspace",
+        verify_output="PASS: Workspace verified",
+    )
+    reconstructed = {
+        "project_name": sub.name.replace("-", " ").title(),
+        "project_slug": sub.name,
+        "template_id": "acid-synth-web" if (sub / "synth.js").exists() else "custom-prompt-app",
+        "template_name": "Forged Application Workspace",
+        "output_dir": sub.as_posix(),
+        "model": "gemini-4-argon-high",
+        "model_id": "gemini-4-argon-high",
+        "model_name": "Gemini 4 Argon (High Thinking)",
+        "custom_prompt": "Forged application in workspaces/",
+        "files_written": files_written,
+        "file_contents": file_contents,
+        "verification_passed": True,
+        "verification_output": "PASS: Workspace ready to launch",
+        "run_hint": f"Click LAUNCH EXTERNAL WINDOW or open {sub.as_posix()}",
+        "preview_html": preview_html,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        manifest.write_text(json.dumps(reconstructed, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        pass
+    return reconstructed
+
+
 def list_built_apps(output_root: str | Path = "workspaces") -> list[dict[str, Any]]:
-    """Scan `workspaces/` and return all forged applications (newest first)."""
+    """Scan `workspaces/` and return all forged applications (newest first, synced with disk)."""
     root = Path(output_root).resolve()
     if not root.exists():
         return []
     apps: list[dict[str, Any]] = []
-    for sub in sorted(root.iterdir(), key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True):
+    for sub in sorted(root.iterdir(), key=_workspace_last_modified, reverse=True):
         if not sub.is_dir():
             continue
-        manifest = sub / "mercbot.app.json"
-        if manifest.exists():
-            try:
-                data = json.loads(manifest.read_text(encoding="utf-8"))
-                if not data.get("preview_html"):
-                    data["preview_html"] = _compile_preview_html(
-                        sub,
-                        display_name=data.get("project_name", sub.name),
-                        model_id=data.get("model", "gemini-4-argon-high"),
-                        brief=data.get("custom_prompt", ""),
-                        verify_output=data.get("verification_output", "PASS"),
-                    )
-                apps.append(data)
-                continue
-            except Exception:
-                pass
-        # Reconstruct manifest for pre-existing workspace directories
-        files_written: list[str] = []
-        file_contents: dict[str, str] = {}
-        for f in sorted(sub.rglob("*")):
-            if f.is_file() and f.name not in ("mercbot.app.json", "bundle.preview.html"):
-                rel = f.relative_to(sub).as_posix()
-                files_written.append(rel)
-                try:
-                    file_contents[rel] = f.read_text(encoding="utf-8", errors="replace")
-                except Exception:
-                    file_contents[rel] = ""
-        if not files_written:
-            continue
-        preview_html = _compile_preview_html(
-            sub,
-            display_name=sub.name.replace("-", " ").title(),
-            model_id="gemini-4-argon-high",
-            brief="Forged application workspace",
-            verify_output="PASS: Workspace verified",
-        )
-        reconstructed = {
-            "project_name": sub.name.replace("-", " ").title(),
-            "project_slug": sub.name,
-            "template_id": "acid-synth-web" if (sub / "synth.js").exists() else "custom-prompt-app",
-            "template_name": "Forged Application Workspace",
-            "output_dir": sub.as_posix(),
-            "model": "gemini-4-argon-high",
-            "model_id": "gemini-4-argon-high",
-            "model_name": "Gemini 4 Argon (High Thinking)",
-            "custom_prompt": "Forged application in workspaces/",
-            "files_written": files_written,
-            "file_contents": file_contents,
-            "verification_passed": True,
-            "verification_output": "PASS: Workspace ready to launch",
-            "run_hint": f"Click LAUNCH EXTERNAL WINDOW or open {sub.as_posix()}",
-            "preview_html": preview_html,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        apps.append(reconstructed)
+        synced = sync_workspace_manifest(sub)
+        if synced is not None:
+            apps.append(synced)
     return apps
 
 
@@ -1780,7 +1872,8 @@ def launch_built_app(
             "message": f"Opened workspace folder {base_dir.as_posix()}",
         }
 
-    # Ensure bundle.preview.html is up to date so launching always works
+    # Always recompile bundle.preview.html from the current files on disk before launching
+    synced = sync_workspace_manifest(base_dir, force_recompile=True)
     preview_file = base_dir / "bundle.preview.html"
     if not preview_file.exists():
         _compile_preview_html(
@@ -1803,6 +1896,7 @@ def launch_built_app(
         "project_slug": base_dir.name,
         "output_dir": base_dir.as_posix(),
         "launched_path": launch_target.as_posix(),
+        "app": synced,
         "message": f"Launched {base_dir.name} ({launch_target.name}) in external window",
     }
 

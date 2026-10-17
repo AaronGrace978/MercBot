@@ -311,6 +311,13 @@ export default function App() {
           `APP FORGED & VERIFIED // ${res.run.built_app.project_name.toUpperCase()} -> ${res.run.built_app.output_dir} — READY TO LAUNCH BELOW`
         );
       } else {
+        if (res.state.built_apps && res.state.built_apps.length > 0) {
+          const refreshed =
+            (forgedApp &&
+              res.state.built_apps.find((a) => a.project_slug === forgedApp.project_slug)) ||
+            res.state.built_apps[0];
+          setForgedApp(refreshed);
+        }
         setStatusBanner(
           `RUN COMPLETE // ${res.run.model.name.toUpperCase()} (${res.run.mode_used.toUpperCase()}) — GRADE ${Math.round(
             res.run.grade.score * 100
@@ -455,6 +462,10 @@ export default function App() {
       );
       const res = await launchBuiltApp({ project_slug: slug, target });
       setState(res.state);
+      const syncedApp = res.state.built_apps?.find((a) => a.project_slug === slug);
+      if (syncedApp) {
+        setForgedApp(syncedApp);
+      }
       setStatusBanner(`LAUNCHED // ${res.launch.message.toUpperCase()}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -974,6 +985,7 @@ export default function App() {
                           </span>
                         </div>
                         <iframe
+                          key={`stage1-${forgedApp.project_slug}-${forgedApp.trace_id || ""}-${forgedApp.preview_html.length}`}
                           title={`Live Stage: ${forgedApp.project_name}`}
                           className="live-stage-iframe"
                           srcDoc={forgedApp.preview_html}
@@ -1516,8 +1528,13 @@ export default function App() {
                         className={`provider-pill ${selectedTemplateId === tpl.id ? "active" : ""}`}
                         onClick={() => {
                           setSelectedTemplateId(tpl.id);
-                          setForgeProjectName(tpl.name);
-                          setForgeCustomPrompt(tpl.tagline);
+                          if (tpl.id === "custom-prompt-app") {
+                            setForgeProjectName("");
+                            setForgeCustomPrompt("");
+                          } else {
+                            setForgeProjectName(tpl.name);
+                            setForgeCustomPrompt(tpl.tagline);
+                          }
                         }}
                       >
                         {tpl.id.toUpperCase()}
@@ -1832,6 +1849,7 @@ export default function App() {
                           </span>
                         </div>
                         <iframe
+                          key={`stage2-${forgedApp.project_slug}-${forgedApp.trace_id || ""}-${forgedApp.preview_html.length}`}
                           title={`MercBot Live App: ${forgedApp.project_name}`}
                           className="live-stage-iframe"
                           srcDoc={forgedApp.preview_html}
@@ -1966,8 +1984,13 @@ export default function App() {
                           className={`forge-template-card ${isSelected ? "selected" : ""}`}
                           onClick={() => {
                             setSelectedTemplateId(tpl.id);
-                            setForgeProjectName(tpl.name);
-                            setForgeCustomPrompt(tpl.tagline);
+                            if (tpl.id === "custom-prompt-app") {
+                              setForgeProjectName("");
+                              setForgeCustomPrompt("");
+                            } else {
+                              setForgeProjectName(tpl.name);
+                              setForgeCustomPrompt(tpl.tagline);
+                            }
                           }}
                         >
                           <div className="model-card-top">

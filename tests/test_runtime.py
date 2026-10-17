@@ -357,5 +357,39 @@ def test_prompt_driven_app_synthesis_builds_requested_app(tmp_path):
     assert "historyTape" in calc_res.built_app["preview_html"]
 
 
+def test_live_workspace_edits_auto_sync_bundle_preview(tmp_path):
+    """Verify bundle.preview.html and mercbot.app.json recompile when index.html/app.js are updated on disk."""
+    from mercury.templates import list_built_apps, sync_workspace_manifest
+
+    runtime = MercuryAgentRuntime(
+        store_path=tmp_path / ".mercury",
+        workspace_root=tmp_path,
+    )
+    webgl_res = runtime.run(
+        "Build me a 3D webGL of a Punk DinoBuddy with a mohawk",
+        model="gemini-4-argon-high",
+        mode="synth",
+    )
+    assert webgl_res.built_app is not None
+    assert "WebGLRenderer" in webgl_res.built_app["preview_html"]
+    ws_dir = tmp_path / "workspaces" / webgl_res.built_app["project_slug"]
+
+    # Simulate a live model editing app.js on disk after initial build
+    (ws_dir / "app.js").write_text(
+        'console.log("CUSTOM_THREEJS_ICOSAHEDRON_LIVE_UPDATE");',
+        encoding="utf-8",
+    )
+
+    apps = list_built_apps(tmp_path / "workspaces")
+    assert len(apps) == 1
+    assert "CUSTOM_THREEJS_ICOSAHEDRON_LIVE_UPDATE" in apps[0]["preview_html"]
+    assert "CUSTOM_THREEJS_ICOSAHEDRON_LIVE_UPDATE" in (ws_dir / "bundle.preview.html").read_text(encoding="utf-8")
+
+    synced = sync_workspace_manifest(ws_dir, force_recompile=True)
+    assert synced is not None
+    assert "CUSTOM_THREEJS_ICOSAHEDRON_LIVE_UPDATE" in synced["preview_html"]
+
+
+
 
 

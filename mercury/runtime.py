@@ -751,6 +751,38 @@ class MercuryAgentRuntime:
             distilled = distill_trace(trace, teacher=True)
 
         grade = grade_trace(trace)
+        live_built_app: dict[str, Any] | None = None
+        for ev in trace.events:
+            for tc in ev.tool_calls or []:
+                if tc.name in ("write_file", "edit_file"):
+                    raw_p = str(tc.arguments.get("path") or "").replace("\\", "/").lstrip("./")
+                    if raw_p.startswith("workspaces/"):
+                        parts = raw_p.split("/")
+                        if len(parts) >= 2 and parts[1]:
+                            from mercury.templates import sync_workspace_manifest
+
+                            ws_dir = self.workspace_root / "workspaces" / parts[1]
+                            synced = sync_workspace_manifest(ws_dir, force_recompile=True)
+                            if synced is not None:
+                                live_built_app = synced
+
+        if is_build_request and live_built_app is None:
+            from mercury.templates import build_app_from_template, infer_template_from_prompt
+
+            tpl_id, proj_title = infer_template_from_prompt(task)
+            artifact, _, _, _ = build_app_from_template(
+                self,
+                template_id=tpl_id,
+                project_name=proj_title,
+                custom_prompt=task,
+                model=spec.id,
+                output_root=self.workspace_root / "workspaces",
+                api_keys=api_keys,
+                mode=mode,
+                on_stream=on_stream,
+            )
+            live_built_app = artifact.as_dict()
+
         elapsed_ms = max(1, int((time.perf_counter() - start_ts) * 1000))
         return AgentRunResult(
             trace=trace,
@@ -763,6 +795,7 @@ class MercuryAgentRuntime:
             mode_used=mode_used,
             final_response=final_text,
             duration_ms=elapsed_ms,
+            built_app=live_built_app,
         )
 
     @staticmethod
