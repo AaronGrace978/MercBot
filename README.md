@@ -187,7 +187,4 @@ uv run --extra dev pytest
 ---
 
 ## License
-
-**Proprietary — Copyright © 2026 Aaron Grace. All rights reserved.**
-
 See [`LICENSE`](LICENSE) for full terms.
