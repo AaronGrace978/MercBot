@@ -173,6 +173,7 @@ class MercuryBridge:
         custom_prompt = str(payload.get("custom_prompt") or "").strip()
         model = str(payload.get("model") or "gemini-4-argon-high").strip()
         auto_launch = bool(payload.get("launch", False))
+        api_keys = payload.get("api_keys") if isinstance(payload.get("api_keys"), dict) else None
         output_root = self.workspace_root / "workspaces"
         emitter = self._make_stream_emitter(on_stream)
 
@@ -189,6 +190,7 @@ class MercuryBridge:
             custom_prompt=custom_prompt,
             model=model,
             output_root=output_root,
+            api_keys=api_keys,
             on_stream=emitter,
         )
         art_dict = artifact.as_dict()

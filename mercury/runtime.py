@@ -672,6 +672,8 @@ class MercuryAgentRuntime:
                 custom_prompt=task,
                 model=spec.id,
                 output_root=self.workspace_root / "workspaces",
+                api_keys=api_keys,
+                mode=mode,
                 on_stream=on_stream,
             )
             elapsed_ms = max(1, int((time.perf_counter() - start_ts) * 1000))

@@ -326,4 +326,36 @@ def test_chunked_event_streaming_bridge(tmp_path):
     assert "token" in chunk_types or "terminal_chunk" in chunk_types
 
 
+def test_prompt_driven_app_synthesis_builds_requested_app(tmp_path):
+    """Verify 'Build a NotePad' and 'Build a Calculator' actually synthesize a real Notepad and Calculator."""
+    runtime = MercuryAgentRuntime(
+        store_path=tmp_path / ".mercury",
+        workspace_root=tmp_path,
+    )
+
+    notepad_res = runtime.run(
+        "Build a NotePad",
+        model="deepseek-v4-pro:cloud",
+        mode="synth",
+    )
+    assert notepad_res.built_app is not None
+    assert notepad_res.built_app["verify_passed"] is True
+    assert "noteEditor" in notepad_res.built_app["preview_html"]
+    assert "noteTitleInput" in notepad_res.built_app["preview_html"]
+    assert "notesList" in notepad_res.built_app["preview_html"]
+    assert "simCanvas" not in notepad_res.built_app["preview_html"]
+
+    calc_res = runtime.run(
+        "Build a Scientific Calculator",
+        model="gemini-4-argon-high",
+        mode="synth",
+    )
+    assert calc_res.built_app is not None
+    assert calc_res.built_app["verify_passed"] is True
+    assert "calcDisplay" in calc_res.built_app["preview_html"]
+    assert "calcKeypad" in calc_res.built_app["preview_html"]
+    assert "historyTape" in calc_res.built_app["preview_html"]
+
+
+
 

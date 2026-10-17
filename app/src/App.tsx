@@ -407,6 +407,9 @@ export default function App() {
       `FORGING APPLICATION // '${(nameToUse || tplToUse).toUpperCase()}' WITH ${selectedModelId.toUpperCase()} ...`
     );
     try {
+      const nonEmptyKeys = Object.fromEntries(
+        Object.entries(apiKeys).filter(([_, v]) => v.trim().length > 0)
+      );
       const res = await buildFromTemplate(
         {
           template_id: tplToUse,
@@ -414,6 +417,7 @@ export default function App() {
           custom_prompt: promptToUse,
           model: selectedModelId,
           launch: Boolean(options?.launchExternal),
+          api_keys: nonEmptyKeys,
         },
         handleStreamChunk
       );

@@ -570,12 +570,13 @@ def has_live_credentials(
             or os.environ.get("GOOGLE_API_KEY")
         )
     if spec.provider is ProviderId.OLLAMA_CLOUD:
+        custom_host = (keys.get("OLLAMA_HOST") or os.environ.get("OLLAMA_HOST") or "").strip().rstrip("/")
+        has_custom_host = bool(custom_host and custom_host.lower() != "https://ollama.com")
         return bool(
             keys.get("OLLAMA_API_KEY")
-            or keys.get("OLLAMA_HOST")
             or keys.get("ollama_cloud")
             or os.environ.get("OLLAMA_API_KEY")
-            or os.environ.get("OLLAMA_HOST")
+            or has_custom_host
         )
     if spec.provider is ProviderId.ANTHROPIC:
         return bool(

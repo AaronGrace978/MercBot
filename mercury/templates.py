@@ -1046,7 +1046,7 @@ def _compile_preview_html(
             css_text = css_file.read_text(encoding="utf-8", errors="replace")
             raw_html = re.sub(
                 r'<link[^>]+href=["\']style\.css["\'][^>]*/?>',
-                f"<style>\n{css_text}\n</style>",
+                lambda _m, _css=css_text: f"<style>\n{_css}\n</style>",
                 raw_html,
                 flags=re.IGNORECASE,
             )
@@ -1056,7 +1056,7 @@ def _compile_preview_html(
                 js_text = js_file.read_text(encoding="utf-8", errors="replace")
                 raw_html = re.sub(
                     rf'<script[^>]+src=["\']{re.escape(js_name)}["\'][^>]*>\s*</script>',
-                    f"<script>\n{js_text}\n</script>",
+                    lambda _m, _js=js_text: f"<script>\n{_js}\n</script>",
                     raw_html,
                     flags=re.IGNORECASE,
                 )
@@ -1164,13 +1164,18 @@ def generate_or_load_spec_manifest(
     slug: str,
     model_spec: FrontierModelSpec,
     brief: str,
+    preserve_existing: bool = False,
 ) -> tuple[str, bool]:
     """Read an existing local SPEC.md or generate a new architectural manifest before modifying files.
 
     Returns (spec_markdown, loaded_existing).
     """
     spec_path = base_dir / "SPEC.md"
-    if spec_path.is_file() and spec_path.stat().st_size > 30:
+    if (
+        spec_path.is_file()
+        and spec_path.stat().st_size > 30
+        and (preserve_existing or not (base_dir / "mercbot.app.json").exists())
+    ):
         return spec_path.read_text(encoding="utf-8", errors="replace"), True
 
     file_lines: list[str] = []
@@ -1362,6 +1367,8 @@ def build_app_from_template(
     custom_prompt: str = "",
     model: str = "gemini-4-argon-high",
     output_root: str | Path = "workspaces",
+    api_keys: dict[str, str] | None = None,
+    mode: str = "auto",
     on_stream: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[BuiltAppArtifact, AgentTrace, BehaviorReport, list[OperationalCard]]:
     """Scaffold, customize, and verify a real multi-file application from a template.
@@ -1382,7 +1389,19 @@ def build_app_from_template(
     base_dir = Path(output_root).resolve() / slug
     base_dir.mkdir(parents=True, exist_ok=True)
 
-    brief = custom_prompt.strip() or tmpl.tagline
+    brief = custom_prompt.strip() or display_name or tmpl.tagline
+    if tmpl.id == "custom-prompt-app":
+        from mercury.prompt_forge import synthesize_prompt_driven_template
+
+        tmpl = synthesize_prompt_driven_template(
+            tmpl,
+            display_name=display_name,
+            brief=brief,
+            model_spec=spec,
+            api_keys=api_keys,
+            mode=mode,
+        )
+
     task_desc = f"Build application '{display_name}' from template '{tmpl.id}': {brief}"
 
     from mercury.runtime import WorkspaceToolbox

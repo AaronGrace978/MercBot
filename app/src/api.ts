@@ -177,6 +177,7 @@ export function buildFromTemplate(
     custom_prompt?: string;
     model: string;
     launch?: boolean;
+    api_keys?: Record<string, string>;
   },
   onStreamChunk?: (chunk: StreamChunkEvent) => void
 ): Promise<BuildAppResponse> {
