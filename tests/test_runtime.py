@@ -357,6 +357,37 @@ def test_prompt_driven_app_synthesis_builds_requested_app(tmp_path):
     assert "historyTape" in calc_res.built_app["preview_html"]
 
 
+def test_webgl_prompt_builds_the_named_subject():
+    """A 3D prompt must build the named subject, not the generic core mesh."""
+    from mercury.prompt_forge import _build_webgl_3d_files
+    from mercury.webgl_subject import resolve_webgl_subject
+
+    chicken = resolve_webgl_subject("Build a 3d Chicken in WebGL")
+    assert chicken["family"] == "bird"
+    assert chicken["token"] == "chicken"
+    assert "comb" in chicken["features"]
+
+    files = _build_webgl_3d_files("3d Chicken In Webgl", "Build a 3d Chicken in WebGL", "kimi-k3:cloud")
+    html = next(item["content"] for item in files if item["path"] == "index.html")
+    js = next(item["content"] for item in files if item["path"] == "app.js")
+    assert "MESH: CHICKEN" in html
+    assert "function buildBird" in js
+    assert "IcosahedronGeometry" in js
+    assert "WebGLRenderer" in js
+
+    dino = resolve_webgl_subject("Build me a 3D webGL of a Punk DinoBuddy with a mohawk")
+    assert dino["family"] == "dino"
+    assert dino["name"] == "Dino Mohawk"
+
+    assert resolve_webgl_subject("Create a 3d cat")["family"] == "quadruped"
+    assert resolve_webgl_subject("forge a 3d spaceship")["family"] == "vehicle"
+    assert resolve_webgl_subject("make a 3d house")["family"] == "structure"
+    assert resolve_webgl_subject("Build a 3d webgl visualizer")["family"] == "core"
+    dragon = resolve_webgl_subject("build a red dragon")
+    assert dragon["family"] == "serpent"
+    assert dragon["colors"]["body"] == 0xE10600
+
+
 def test_live_workspace_edits_auto_sync_bundle_preview(tmp_path):
     """Verify bundle.preview.html and mercbot.app.json recompile when index.html/app.js are updated on disk."""
     from mercury.templates import list_built_apps, sync_workspace_manifest

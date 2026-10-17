@@ -1715,8 +1715,14 @@ print("PASS: Custom Domain Application Studio verified")
 
 
 def _build_webgl_3d_files(display_name: str, brief: str, model_id: str) -> list[dict[str, str]]:
-    is_dino = any(w in f"{display_name} {brief}".lower() for w in ("dino", "mohawk", "trex", "t-rex"))
-    initial_mesh = "dino" if is_dino else "core"
+    from mercury.webgl_subject import mesh_mode_for_subject, resolve_webgl_subject, subject_bootstrap_js, subject_builder_js
+
+    subject = resolve_webgl_subject(f"{display_name}\n{brief}")
+    mode_for_family = mesh_mode_for_subject(subject)
+    mesh_modes = ["subject", "core", "dino", "torus"]
+    initial_idx = mesh_modes.index(mode_for_family)
+    mesh_label = subject["name"].upper()
+    subject_name = subject["name"]
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1744,14 +1750,14 @@ def _build_webgl_3d_files(display_name: str, brief: str, model_id: str) -> list[
       <section class="panel">
         <div class="panel-head">
           <span>// INTERACTIVE 3D WEBGL SIMULATION &amp; VISUALIZER (DRAG TO ORBIT • SCROLL TO ZOOM)</span>
-          <span id="meshLabel" style="color:var(--acid);">MESH: {initial_mesh.upper()}</span>
+          <span id="meshLabel" style="color:var(--acid);">MESH: {mesh_label}</span>
         </div>
-        <canvas id="simCanvas" width="760" height="400" data-initial-mesh="{initial_mesh}"></canvas>
+        <canvas id="simCanvas" width="760" height="400" data-initial-mesh="{mode_for_family}" data-subject="{subject_name}"></canvas>
         <div class="controls" style="margin-top:12px;">
           <button id="pulseBtn">TRIGGER PULSE WAVE</button>
           <button id="spawnBtn">SPAWN ORBITAL NODE</button>
           <button id="modeBtn" class="secondary">CYCLE SHADER MODE</button>
-          <button id="meshBtn" class="secondary">SWITCH 3D MODEL (CORE / DINO MOHAWK / TORUS)</button>
+          <button id="meshBtn" class="secondary">SWITCH 3D MODEL</button>
           <button id="clearBtn" class="secondary">RESET MATRIX</button>
         </div>
       </section>
@@ -1762,7 +1768,7 @@ def _build_webgl_3d_files(display_name: str, brief: str, model_id: str) -> list[
           <span id="shaderBadge" style="color:var(--magenta);">SHADER: NEON SOLID</span>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:10px;">
-          <input id="entryInput" placeholder="Dispatch 3D shader command or spawn geometry..." />
+          <input id="entryInput" placeholder="Tell it what to build next — chicken, cat, spaceship, house..." />
           <button id="addEntryBtn">EXECUTE</button>
         </div>
         <div id="entriesList" class="entries"></div>
@@ -1828,8 +1834,8 @@ let ops = 0;
 let energy = 100;
 let shaderMode = 0; // 0: Neon Solid, 1: Acid Wireframe, 2: Magenta Overdrive
 const shaderNames = ["NEON SOLID", "ACID WIREFRAME", "MAGENTA OVERDRIVE"];
-const meshModes = ["core", "dino", "torus"];
-let currentMeshIdx = meshModes.indexOf(canvas.dataset.initialMesh || "{initial_mesh}");
+const meshModes = ["subject", "core", "dino", "torus"];
+let currentMeshIdx = {initial_idx};
 if (currentMeshIdx < 0) currentMeshIdx = 0;
 
 let pulseActive = false;
@@ -1837,11 +1843,14 @@ let pulseTimer = 0;
 let rotX = 0.25;
 let rotY = -0.5;
 let zoom = 12;
+let userAdjustedZoom = false;
+let fitZoom = 12;
+___SUBJECT_BOOTSTRAP___
 let dragging = false;
 let lastMouse = {{ x: 0, y: 0 }};
 
 const records = [
-  {{ id: 101, text: "Initialized 3D WebGL Geometry & Shader Engine", status: "ACTIVE" }},
+  {{ id: 101, text: "Initialized 3D subject mesh: {subject_name}", status: "ACTIVE" }},
   {{ id: 102, text: "3D Scene Ready: {display_name}", status: "VERIFIED" }}
 ];
 
@@ -1882,7 +1891,8 @@ window.addEventListener("mousemove", (e) => {{
 }});
 canvas.addEventListener("wheel", (e) => {{
   e.preventDefault();
-  zoom = Math.max(6, Math.min(24, zoom + e.deltaY * 0.01));
+  zoom = Math.max(4, Math.min(28, zoom + e.deltaY * 0.01));
+  userAdjustedZoom = true;
 }}, {{ passive: false }});
 
 let spawnNodeFn = () => {{}};
@@ -1903,11 +1913,14 @@ if (typeof window.THREE !== "undefined") {{
   const camera = new THREE.PerspectiveCamera(45, (canvas.clientWidth || 760) / (canvas.clientHeight || 400), 0.1, 1000);
   camera.position.z = zoom;
 
-  scene.add(new THREE.AmbientLight(0x2a2a2a));
-  const light1 = new THREE.PointLight(0xff007f, 1.8, 60);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.62));
+  const keyLight = new THREE.DirectionalLight(0xfff8ee, 0.95);
+  keyLight.position.set(6, 10, 8);
+  scene.add(keyLight);
+  const light1 = new THREE.PointLight(0xff007f, 0.45, 60);
   light1.position.set(6, 6, 6);
   scene.add(light1);
-  const light2 = new THREE.PointLight(0x39ff14, 1.8, 60);
+  const light2 = new THREE.PointLight(0x39ff14, 0.35, 60);
   light2.position.set(-6, -5, 6);
   scene.add(light2);
 
@@ -1917,31 +1930,39 @@ if (typeof window.THREE !== "undefined") {{
   const nodes = [];
   const materials = [];
 
-  function makeMat(hex, wire = false, emissive = 0x09150d) {{
+  function makeMat(hex, wire = false, emissive = 0x09150d, kind = "metal") {{
+    const organic = kind === "organic" || kind === "matte";
+    const gel = kind === "gel";
     const m = new THREE.MeshStandardMaterial({{
       color: hex,
-      metalness: 0.75,
-      roughness: 0.25,
+      metalness: organic || gel ? 0.04 : 0.75,
+      roughness: kind === "matte" ? 0.9 : organic ? 0.72 : gel ? 0.2 : 0.25,
       wireframe: wire || shaderMode === 1,
-      emissive: shaderMode === 2 ? 0x33001b : emissive
+      emissive: shaderMode === 2 ? 0x33001b : (organic || gel ? 0x000000 : emissive),
+      flatShading: organic,
+      transparent: gel,
+      opacity: gel ? 0.9 : 1
     }});
     materials.push(m);
     return m;
   }}
 
+___BUILD_REQUESTED_SUBJECT___
   function build3DModel() {{
     while (rootGroup.children.length > 0) {{
       rootGroup.remove(rootGroup.children[0]);
     }}
     materials.length = 0;
     const modeName = meshModes[currentMeshIdx];
-    meshLabel.textContent = `MESH: ${{modeName.toUpperCase()}}`;
+    meshLabel.textContent = (modeName === "subject" || modeName === activeSubject.family)
+      ? ("MESH: " + activeSubject.name.toUpperCase())
+      : ("MESH: " + modeName.toUpperCase());
 
     if (modeName === "dino") {{
       // 3D Punk DinoBuddy with Neon Mohawk
-      const bodyMat = makeMat(0x39ff14);
-      const mohawkMat = makeMat(0xff007f, false, 0x440022);
-      const eyeMat = makeMat(0xf5ff00, false, 0x555500);
+      const bodyMat = makeMat(activeSubject.colors.body);
+      const mohawkMat = makeMat(activeSubject.colors.detail, false, 0x440022);
+      const eyeMat = makeMat(activeSubject.colors.eye, false, 0x555500);
 
       const torso = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.6, 1.6), bodyMat);
       torso.position.set(0, -0.4, 0);
@@ -1988,7 +2009,7 @@ if (typeof window.THREE !== "undefined") {{
         new THREE.MeshBasicMaterial({{ color: 0xff007f, wireframe: true, transparent: true, opacity: 0.35 }})
       );
       rootGroup.add(wireCage);
-    }} else {{
+    }} else if (modeName === "core") {{
       // MercBot 3D Core + Orbital Rings
       const core = new THREE.Mesh(new THREE.IcosahedronGeometry(2.1, 0), makeMat(0x223829));
       rootGroup.add(core);
@@ -2004,6 +2025,8 @@ if (typeof window.THREE !== "undefined") {{
       );
       ring2.rotation.y = Math.PI / 2;
       rootGroup.add(ring2);
+    }} else {{
+      buildRequestedSubject();
     }}
   }}
 
@@ -2036,7 +2059,8 @@ if (typeof window.THREE !== "undefined") {{
 
   rebuildMeshFn = build3DModel;
   build3DModel();
-  for (let i = 0; i < 5; i++) spawnNodeFn();
+  const orbitCount = (activeSubject.family === "core" || activeSubject.family === "torus") ? 5 : 0;
+  for (let i = 0; i < orbitCount; i++) spawnNodeFn();
 
   window.addEventListener("resize", () => {{
     if (!canvas.clientWidth) return;
@@ -2094,6 +2118,10 @@ if (typeof window.THREE !== "undefined") {{
     const r = pulseActive ? 95 : 75;
     if (pulseActive && --pulseTimer <= 0) pulseActive = false;
 
+    if (activeSubject && activeSubject.family !== "core" && activeSubject.family !== "torus") {{
+      drawSubjectFallback(ctx);
+      return;
+    }}
     ctx.strokeStyle = shaderMode === 2 ? "#ff007f" : "#39ff14";
     ctx.lineWidth = 2;
     for (let i = 0; i < 12; i++) {{
@@ -2135,7 +2163,8 @@ document.getElementById("clearBtn").addEventListener("click", () => {{
   clearNodesFn();
   rotX = 0.25;
   rotY = -0.5;
-  zoom = 12;
+  userAdjustedZoom = false;
+  zoom = fitZoom || 12;
   bumpOps("Reset 3D orbital matrix & camera transform");
 }});
 
@@ -2143,15 +2172,14 @@ document.getElementById("addEntryBtn").addEventListener("click", () => {{
   const v = entryInput.value.trim();
   if (!v) return;
   entryInput.value = "";
-  if (v.toLowerCase().includes("dino") || v.toLowerCase().includes("mohawk")) {{
-    currentMeshIdx = 1;
-    rebuildMeshFn();
-  }}
+  applySubjectCommand(v);
   pulseActive = true;
   pulseTimer = 45;
   bumpOps(`Executed 3D command: ${{v}}`);
 }});
-"""
+""".replace("___SUBJECT_BOOTSTRAP___", subject_bootstrap_js(subject)).replace(
+        "___BUILD_REQUESTED_SUBJECT___", subject_builder_js()
+    )
 
     verify_py = """from pathlib import Path
 
@@ -2168,7 +2196,7 @@ print("PASS: 3D WebGL & Three.js interactive visualizer bundle verified")
     return [
         {"path": "index.html", "description": "Interactive 3D WebGL & Three.js Visualizer UI", "content": html},
         {"path": "style.css", "description": "Acid-punk 3D WebGL viewport stylesheet", "content": css},
-        {"path": "app.js", "description": "Three.js 3D WebGL engine (MercBot Core, Punk Dino Mohawk, Torus Knot)", "content": js},
+        {"path": "app.js", "description": f"Three.js 3D WebGL engine for {subject_name}", "content": js},
         {"path": "verify_custom.py", "description": "Smoke test verifying 3D WebGL application bundle", "content": verify_py},
     ]
 
