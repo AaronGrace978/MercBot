@@ -423,6 +423,7 @@ export default function App() {
           project_name: nameToUse,
           custom_prompt: promptToUse,
           model: selectedModelId,
+          mode: execMode,
           launch: Boolean(options?.launchExternal),
           api_keys: nonEmptyKeys,
         },

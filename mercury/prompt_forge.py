@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import TYPE_CHECKING, Any
 
-from mercury.providers import (
-    FrontierModelSpec,
-    call_frontier_provider,
-    has_live_credentials,
-)
+from mercury.providers import FrontierModelSpec
 
 if TYPE_CHECKING:
     from mercury.templates import AppTemplate, AppTemplateFile
@@ -227,19 +222,6 @@ def detect_prompt_archetype(display_name: str, brief: str) -> str:
     if any(
         w in combined
         for w in (
-            "chat",
-            "messenger",
-            "chatbot",
-            "ai assistant",
-            "prompt console",
-            "conversation",
-        )
-    ):
-        return "chat"
-
-    if any(
-        w in combined
-        for w in (
             "password",
             "json",
             "regex",
@@ -253,6 +235,35 @@ def detect_prompt_archetype(display_name: str, brief: str) -> str:
         )
     ):
         return "devtools"
+
+    # Marketing / product sites before WebGL so "generative UI landing page" is never a CRUD stub.
+    if re.search(
+        r"landing\s*pages?|web\s*sites?|web\s*pages?|home\s*pages?|homepages?|"
+        r"marketing\s*(?:site|page)|product\s*page|pricing\s*page|splash\s*page|"
+        r"one[- ]pagers?|generative\s*ui|\bgen(?:erative)?\s*ui\b|\bsaas\s*(?:landing|site|page)\b",
+        combined,
+    ) or re.search(r"\b(?:website|webpage|homepage|landing)\b", combined):
+        return "landing_page"
+
+    if re.search(
+        r"\bdashboards?\b|admin\s*panels?|analytics\s*(?:dashboard|panel|console)|"
+        r"kpi\s*(?:board|dashboard)|metrics\s*(?:dashboard|panel)",
+        combined,
+    ):
+        return "dashboard"
+
+    if any(
+        w in combined
+        for w in (
+            "chat",
+            "messenger",
+            "chatbot",
+            "ai assistant",
+            "prompt console",
+            "conversation",
+        )
+    ):
+        return "chat"
 
     if any(
         w in combined
@@ -271,7 +282,6 @@ def detect_prompt_archetype(display_name: str, brief: str) -> str:
             "mohawk",
             "hologram",
             "oscilloscope",
-            "graphic",
         )
     ):
         return "webgl_3d"
@@ -2201,59 +2211,31 @@ print("PASS: 3D WebGL & Three.js interactive visualizer bundle verified")
     ]
 
 
+# Open-ended products where the selected model should write the app when reachable.
+# Offline builders below are the fallback so synth mode still ships a real product.
+_LIVE_FIRST_ARCHETYPES = frozenset({"landing_page", "dashboard", "domain_studio", "chat"})
+
+
 def _try_live_llm_app_synthesis(
     spec: FrontierModelSpec,
     display_name: str,
     brief: str,
     api_keys: dict[str, str] | None,
+    *,
+    on_progress: Any | None = None,
 ) -> list[dict[str, str]] | None:
-    """When live frontier credentials are configured, ask the frontier model to synthesize the app."""
-    if not has_live_credentials(spec, api_keys):
-        return None
-    system_msg = (
-        "You are MercBot Application Forge. Output ONLY a valid JSON object with keys "
-        '"index.html", "style.css", and "app.js" implementing a complete, self-contained, '
-        "interactive HTML5/CSS3/JS application matching the user's request. "
-        'Ensure index.html links style.css and app.js (`<link rel="stylesheet" href="style.css" />` '
-        'and `<script src="app.js"></script>`).'
+    """Ask the selected frontier model to write the app (validated file blocks + one repair)."""
+    from mercury.app_synthesis import synthesize_app_with_model
+
+    result = synthesize_app_with_model(
+        spec,
+        display_name=display_name,
+        brief=brief,
+        api_keys=api_keys,
+        on_progress=on_progress,
     )
-    user_msg = f"Application Name: {display_name}\nRequest: {brief}\nReturn ONLY raw JSON."
-    try:
-        resp = call_frontier_provider(
-            spec,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
-            tools=[],
-            api_keys=api_keys,
-            timeout=20.0,
-            allow_offline_fallback=False,
-        )
-        raw = resp.content.strip()
-        if "```" in raw:
-            m = re.search(r"```(?:json)?\s*(\{[\s\S]+?\})\s*```", raw)
-            if m:
-                raw = m.group(1)
-        data = json.loads(raw)
-        html = str(data.get("index.html") or "")
-        css = str(data.get("style.css") or SHARED_ACID_CSS)
-        js = str(data.get("app.js") or "")
-        if len(html) > 120 and len(js) > 40:
-            verify_py = """from pathlib import Path
-for req in ("index.html", "style.css", "app.js"):
-    p = Path(req)
-    assert p.exists() and p.stat().st_size > 40, f"Missing {req}"
-print("PASS: Live Frontier LLM synthesized application verified")
-"""
-            return [
-                {"path": "index.html", "description": f"Live LLM forged {display_name} UI", "content": html},
-                {"path": "style.css", "description": f"Stylesheet for {display_name}", "content": css},
-                {"path": "app.js", "description": f"Interactive logic for {display_name}", "content": js},
-                {"path": "verify_custom.py", "description": "Smoke test verifying forged bundle", "content": verify_py},
-            ]
-    except Exception:
-        return None
+    if result.ok and result.files:
+        return result.files
     return None
 
 
@@ -2265,18 +2247,28 @@ def synthesize_prompt_driven_template(
     model_spec: FrontierModelSpec,
     api_keys: dict[str, str] | None = None,
     mode: str = "auto",
+    on_progress: Any | None = None,
 ) -> "AppTemplate":
     """Return a prompt-tailored AppTemplate that actually builds what the user asked for."""
+    from mercury.offline_sites import build_dashboard_files, build_landing_page_files
     from mercury.templates import AppTemplate, AppTemplateFile
 
     archetype = detect_prompt_archetype(display_name, brief)
     if archetype == "telemetry":
         return base_tmpl
 
-    # 1. When mode is explicitly 'live', or when mode is 'auto' for an open-ended custom domain prompt
-    #    and explicit API keys were supplied, query the live frontier LLM to synthesize bespoke files.
-    if mode == "live" or (mode == "auto" and archetype == "domain_studio" and api_keys):
-        live_files = _try_live_llm_app_synthesis(model_spec, display_name, brief, api_keys)
+    # 1. Live model writes the product when the user asked for live/auto on an open-ended request.
+    want_live = mode == "live" or (
+        mode == "auto" and (archetype in _LIVE_FIRST_ARCHETYPES or bool(api_keys))
+    )
+    if want_live:
+        live_files = _try_live_llm_app_synthesis(
+            model_spec,
+            display_name,
+            brief,
+            api_keys,
+            on_progress=on_progress,
+        )
         if live_files:
             return AppTemplate(
                 id=base_tmpl.id,
@@ -2290,7 +2282,7 @@ def synthesize_prompt_driven_template(
                 files=[AppTemplateFile(**f) for f in live_files],
             )
 
-    # 2. Synthesize concrete functional application matching the prompt archetype
+    # 2. Offline builders that still match the request (never a generic CRUD stub for sites).
     builders = {
         "notepad": _build_notepad_files,
         "calculator": _build_calculator_files,
@@ -2299,6 +2291,9 @@ def synthesize_prompt_driven_template(
         "paint": _build_paint_files,
         "devtools": _build_devtools_files,
         "webgl_3d": _build_webgl_3d_files,
+        "landing_page": build_landing_page_files,
+        "dashboard": build_dashboard_files,
+        "chat": _build_domain_studio_files,
         "domain_studio": _build_domain_studio_files,
     }
     builder_fn = builders.get(archetype, _build_domain_studio_files)

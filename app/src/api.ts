@@ -176,6 +176,7 @@ export function buildFromTemplate(
     project_name?: string;
     custom_prompt?: string;
     model: string;
+    mode?: "auto" | "synth" | "live";
     launch?: boolean;
     api_keys?: Record<string, string>;
   },

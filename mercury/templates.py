@@ -1402,6 +1402,10 @@ def build_app_from_template(
     if tmpl.id == "custom-prompt-app":
         from mercury.prompt_forge import synthesize_prompt_driven_template
 
+        def _forge_progress(msg: str) -> None:
+            if on_stream:
+                on_stream({"type": "terminal_chunk", "line": msg, "tool_name": "forge", "timestamp": time.time()})
+
         tmpl = synthesize_prompt_driven_template(
             tmpl,
             display_name=display_name,
@@ -1409,6 +1413,7 @@ def build_app_from_template(
             model_spec=spec,
             api_keys=api_keys,
             mode=mode,
+            on_progress=_forge_progress,
         )
 
     task_desc = f"Build application '{display_name}' from template '{tmpl.id}': {brief}"

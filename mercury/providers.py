@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -641,6 +642,50 @@ def _is_network_drop_error(exc: BaseException) -> bool:
     )
 
 
+LOCAL_OLLAMA_HOST = "http://127.0.0.1:11434"
+_LOCAL_OLLAMA_PROBE: dict[str, Any] = {"checked_at": 0.0, "models": None}
+
+
+def local_ollama_models(*, max_age: float = 30.0) -> list[str] | None:
+    """Return model names served by a local Ollama daemon, or None when no daemon answers."""
+    now = time.time()
+    if now - float(_LOCAL_OLLAMA_PROBE["checked_at"]) < max_age:
+        return _LOCAL_OLLAMA_PROBE["models"]
+    models: list[str] | None
+    try:
+        req = urllib.request.Request(f"{LOCAL_OLLAMA_HOST}/api/tags", headers={"User-Agent": "mercbot-acid-runtime/0.1"})
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+        models = [str(m.get("name") or m.get("model") or "") for m in data.get("models") or []]
+    except Exception:
+        models = None
+    _LOCAL_OLLAMA_PROBE["checked_at"] = now
+    _LOCAL_OLLAMA_PROBE["models"] = models
+    return models
+
+
+def _is_local_host(host: str) -> bool:
+    lowered = host.lower()
+    return "127.0.0.1" in lowered or "localhost" in lowered or "0.0.0.0" in lowered
+
+
+def live_model_route(
+    spec: FrontierModelSpec,
+    api_keys: dict[str, str] | None = None,
+) -> tuple[bool, str]:
+    """Report whether `spec` can be called right now, and how (or why not)."""
+    if has_live_credentials(spec, api_keys):
+        return True, f"{spec.provider_label} API credentials"
+    if spec.provider is ProviderId.OLLAMA_CLOUD:
+        if local_ollama_models() is not None:
+            return True, f"local Ollama daemon at {LOCAL_OLLAMA_HOST} (routes {spec.id} to Ollama Cloud)"
+        return False, (
+            f"No OLLAMA_API_KEY and no local Ollama daemon at {LOCAL_OLLAMA_HOST}. "
+            "Install/start Ollama and run `ollama signin`, or paste an OLLAMA_API_KEY."
+        )
+    return False, f"No {spec.env_key or 'API key'} configured for {spec.provider_label}."
+
+
 def _dispatch_provider(
     spec: FrontierModelSpec,
     messages: list[dict[str, Any]],
@@ -648,13 +693,14 @@ def _dispatch_provider(
     *,
     keys: dict[str, str],
     timeout: float,
+    max_output_tokens: int | None = None,
 ) -> ProviderTurnResponse:
     if spec.provider is ProviderId.GOOGLE:
-        return _call_google_gemini(spec, messages, tools, keys=keys, timeout=timeout)
+        return _call_google_gemini(spec, messages, tools, keys=keys, timeout=timeout, max_output_tokens=max_output_tokens)
     if spec.provider is ProviderId.OLLAMA_CLOUD:
-        return _call_ollama_cloud(spec, messages, tools, keys=keys, timeout=timeout)
+        return _call_ollama_cloud(spec, messages, tools, keys=keys, timeout=timeout, max_output_tokens=max_output_tokens)
     if spec.provider is ProviderId.ANTHROPIC:
-        return _call_anthropic(spec, messages, tools, keys=keys, timeout=timeout)
+        return _call_anthropic(spec, messages, tools, keys=keys, timeout=timeout, max_output_tokens=max_output_tokens)
     if spec.provider in (ProviderId.OPENAI, ProviderId.XAI):
         return _call_openai_compatible(spec, messages, tools, keys=keys, timeout=timeout)
     raise ValueError(f"Unsupported provider: {spec.provider}")
@@ -760,6 +806,7 @@ def call_frontier_provider(
     api_keys: dict[str, str] | None = None,
     timeout: float = 45.0,
     allow_offline_fallback: bool = True,
+    max_output_tokens: int | None = None,
 ) -> ProviderTurnResponse:
     """Dispatch a single agent turn to the frontier provider REST API with Offline Mode Enforcement.
 
@@ -770,7 +817,14 @@ def call_frontier_provider(
     keys = api_keys or {}
     effective_tools = tools if tools is not None else []
     try:
-        return _dispatch_provider(spec, messages, effective_tools, keys=keys, timeout=timeout)
+        return _dispatch_provider(
+            spec,
+            messages,
+            effective_tools,
+            keys=keys,
+            timeout=timeout,
+            max_output_tokens=max_output_tokens,
+        )
     except Exception as primary_exc:
         if not allow_offline_fallback or not _is_network_drop_error(primary_exc):
             raise
@@ -782,7 +836,7 @@ def call_frontier_provider(
             or os.environ.get("OLLAMA_FALLBACK_HOST")
             or keys.get("OLLAMA_LOCAL_HOST")
             or os.environ.get("OLLAMA_LOCAL_HOST")
-            or "http://127.0.0.1:11434"
+            or LOCAL_OLLAMA_HOST
         )
         fallback_keys = {
             **keys,
@@ -825,6 +879,7 @@ def _call_google_gemini(
     *,
     keys: dict[str, str],
     timeout: float,
+    max_output_tokens: int | None = None,
 ) -> ProviderTurnResponse:
     api_key = (
         keys.get("GEMINI_API_KEY")
@@ -893,6 +948,8 @@ def _call_google_gemini(
         payload["systemInstruction"] = {"parts": system_parts}
     if declarations:
         payload["tools"] = [{"functionDeclarations": declarations}]
+    if max_output_tokens:
+        payload["generationConfig"] = {"maxOutputTokens": int(max_output_tokens)}
 
     raw = _http_post_json(url, payload, headers={"Content-Type": "application/json"}, timeout=timeout)
     candidates = raw.get("candidates") or []
@@ -929,6 +986,7 @@ def _call_ollama_cloud(
     *,
     keys: dict[str, str],
     timeout: float,
+    max_output_tokens: int | None = None,
 ) -> ProviderTurnResponse:
     api_key = (
         keys.get("OLLAMA_API_KEY")
@@ -939,9 +997,13 @@ def _call_ollama_cloud(
     host = (
         keys.get("OLLAMA_HOST")
         or os.environ.get("OLLAMA_HOST")
-        or ("https://ollama.com" if api_key else "http://127.0.0.1:11434")
-    ).rstrip("/")
+        or ""
+    ).strip().rstrip("/")
+    if not host or (not api_key and host.lower() == "https://ollama.com"):
+        host = "https://ollama.com" if api_key else LOCAL_OLLAMA_HOST
     url = host if host.endswith("/api/chat") else f"{host}/api/chat"
+    # A local daemon serves cloud models under their `:cloud` / `-cloud` tag, not the bare API name.
+    model_name = spec.id if _is_local_host(host) and "cloud" in spec.id.lower() else spec.api_model
 
     ollama_tools = [
         {
@@ -971,18 +1033,28 @@ def _call_ollama_cloud(
         ollama_messages.append(entry)
 
     payload: dict[str, Any] = {
-        "model": spec.api_model,
+        "model": model_name,
         "messages": ollama_messages,
         "stream": False,
     }
     if ollama_tools:
         payload["tools"] = ollama_tools
+    if max_output_tokens:
+        payload["options"] = {"num_predict": int(max_output_tokens)}
 
     headers = {"Content-Type": "application/json"}
-    if api_key:
+    if api_key and not _is_local_host(host):
         headers["Authorization"] = f"Bearer {api_key}"
 
-    raw = _http_post_json(url, payload, headers=headers, timeout=timeout)
+    try:
+        raw = _http_post_json(url, payload, headers=headers, timeout=timeout)
+    except RuntimeError as exc:
+        if _is_local_host(host) and "HTTP 401" in str(exc):
+            raise RuntimeError(
+                f"Local Ollama daemon rejected `{model_name}` (401 Unauthorized). "
+                "Run `ollama signin` so the daemon can reach Ollama Cloud, or paste an OLLAMA_API_KEY."
+            ) from exc
+        raise
     message = raw.get("message") or {}
     content = str(message.get("content") or "")
     tool_calls: list[ToolCall] = []
@@ -1017,6 +1089,7 @@ def _call_anthropic(
     *,
     keys: dict[str, str],
     timeout: float,
+    max_output_tokens: int | None = None,
 ) -> ProviderTurnResponse:
     api_key = (
         keys.get("ANTHROPIC_API_KEY")
@@ -1076,7 +1149,7 @@ def _call_anthropic(
 
     payload: dict[str, Any] = {
         "model": spec.api_model,
-        "max_tokens": 4096,
+        "max_tokens": int(max_output_tokens or 4096),
         "messages": anth_messages,
     }
     if system_chunks:

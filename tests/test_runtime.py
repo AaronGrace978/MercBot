@@ -388,6 +388,39 @@ def test_webgl_prompt_builds_the_named_subject():
     assert dragon["colors"]["body"] == 0xE10600
 
 
+def test_landing_page_prompt_is_not_crud_domain_studio(tmp_path):
+    """Landing / generative UI prompts must ship a real marketing page, not the CRUD stub."""
+    from mercury.prompt_forge import detect_prompt_archetype
+    from mercury.runtime import MercuryAgentRuntime
+
+    assert (
+        detect_prompt_archetype(
+            "Cool Cyberpunk Generative Ui",
+            "Build me a Cool CyberPunk Generative Ui landing page",
+        )
+        == "landing_page"
+    )
+    assert detect_prompt_archetype("Coffee Shop", "make a minimal coffee shop website") == "landing_page"
+    assert detect_prompt_archetype("Ops Console", "build an analytics dashboard") == "dashboard"
+
+    runtime = MercuryAgentRuntime(
+        store_path=tmp_path / ".mercury",
+        workspace_root=tmp_path,
+    )
+    res = runtime.run(
+        "Build me a Cool CyberPunk Generative Ui landing page",
+        model="gemini-4-argon-high",
+        mode="synth",
+    )
+    assert res.built_app is not None
+    assert res.built_app["verify_passed"] is True
+    preview = res.built_app["preview_html"]
+    assert "domainList" not in preview
+    assert "createItemBtn" not in preview
+    assert "hero" in preview.lower() or "Generate" in preview
+    assert "cyber" in preview.lower() or "neon" in preview.lower() or "#ff2bd6" in preview
+
+
 def test_live_workspace_edits_auto_sync_bundle_preview(tmp_path):
     """Verify bundle.preview.html and mercbot.app.json recompile when index.html/app.js are updated on disk."""
     from mercury.templates import list_built_apps, sync_workspace_manifest

@@ -654,9 +654,10 @@ class MercuryAgentRuntime:
         # If the user task is an application build request, scaffold & verify a real app in workspaces/
         is_build_request = bool(
             re.search(
-                r"^\s*(?:please\s+)?(?:build|create|forge|scaffold|generate)\b|"
-                r"\b(?:build|create|forge|scaffold)\s+(?:me\s+)?(?:a|an|the)?\s*"
-                r"(?:app|application|synth|sequencer|kanban|board|api|service|vault|desktop|cli|dashboard|studio|game|tool)\b",
+                r"^\s*(?:please\s+)?(?:build|create|forge|scaffold|generate|make|design)\b|"
+                r"\b(?:build|create|forge|scaffold|make|design)\s+(?:me\s+)?(?:a|an|the)?\s*"
+                r"(?:app|application|synth|sequencer|kanban|board|api|service|vault|desktop|cli|"
+                r"dashboard|studio|game|tool|landing|website|webpage|homepage|site|page|ui)\b",
                 task,
                 re.IGNORECASE,
             )
