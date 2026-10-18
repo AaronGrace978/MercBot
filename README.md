@@ -124,6 +124,14 @@ uv run python -m mercury run --model kimi-k3:cloud --mode live \
 
 # Compile a Frontier Operating Pack (.cursor/rules/mercury.mdc, markdown, dpo, or sft)
 uv run python -m mercury pack --task "Fix the login redirect loop" --model gpt-4o-mini --format cursor-rule
+
+# Control group: run a lesser model on the identical task with the pack and with no system prompt,
+# each in its own workspace copy. Prints both grades side by side and appends them to .mercury/ab_log.jsonl.
+# Needs --mode live (synth/forge runs never call the model, so the report marks them NOT MEASURABLE).
+uv run python -m mercury run --no-pack --model gpt-4o-mini --mode live --task "Fix the login redirect loop"
+
+# Gate every new card on a teacher-model check against its source trace (one call per card)
+uv run python -m mercury --validate-cards capture examples/traces/opus-auth.json
 ```
 
 ### 3. Launch the Acid-Punk Desktop / Web UI (Tauri v2 + React + Vite)
