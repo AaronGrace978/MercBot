@@ -13,6 +13,13 @@ Checks are split into two bands:
   This is what separates a disciplined frontier run from "explore once then
   thrash."
 
+A final **outcome anchor** (``outcome_anchored``) then asks one cheap question:
+did the change address what was asked? It is not an LLM judge. It measures how
+much of the task statement shows up in the files touched, the outcome summary
+and the edit intent, and it hard-fails on the contradiction "outcome says
+failure, yet the process looked flawless" (policy score high). A hard fail
+zeroes ``score`` so the contradiction cannot hide inside an average.
+
 The combined ``score`` remains the mean of all fired checks (backward
 compatible). Prefer ``policy_score`` / ``competence_score`` / ``grade_delta``
 when using grade as an absolute instrument or a before/after pack delta.
@@ -22,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -51,6 +59,14 @@ COMPETENCE_CHECKS = {
     "phase_completeness",
     "no_edit_thrash",
 }
+OUTCOME_CHECKS = {"outcome_anchored"}
+
+# A failed run whose process hygiene scored at or above this is a contradiction.
+HIGH_POLICY_SCORE = 0.8
+# Below this many fired policy checks, a "high" policy score is trivially high.
+MIN_POLICY_CHECKS_FOR_CONTRADICTION = 3
+# Fraction of the task's distinctive terms that must reappear in the change.
+MIN_ANCHOR_COVERAGE = 0.15
 
 
 @dataclass(frozen=True)
@@ -68,7 +84,8 @@ class CheckResult:
     name: str
     passed: bool
     detail: str = ""
-    band: str = "policy"  # "policy" | "competence"
+    band: str = "policy"  # "policy" | "competence" | "outcome"
+    hard: bool = False  # a failed hard check zeroes the overall score
 
 
 @dataclass
@@ -79,10 +96,14 @@ class BehaviorReport:
 
     @property
     def score(self) -> float:
-        """Mean of all fired checks (floor + ceiling). Backward compatible."""
-        if not self.checks:
+        """Mean of all fired checks (floor + ceiling). Zero on a hard fail."""
+        if not self.checks or self.hard_failed:
             return 0.0
         return sum(1.0 for check in self.checks if check.passed) / len(self.checks)
+
+    @property
+    def hard_failed(self) -> bool:
+        return any(check.hard and not check.passed for check in self.checks)
 
     @property
     def policy_score(self) -> float:
@@ -114,6 +135,8 @@ class BehaviorReport:
                 f"competence ceiling {self.competence_score:.0%}) — {self.model}"
             )
         ]
+        if self.hard_failed:
+            lines[0] += " — HARD FAIL"
         for check in self.checks:
             mark = "PASS" if check.passed else "FAIL"
             suffix = f" — {check.detail}" if check.detail else ""
@@ -127,6 +150,7 @@ class BehaviorReport:
             "score": round(self.score, 4),
             "policy_score": round(self.policy_score, 4),
             "competence_score": round(self.competence_score, 4),
+            "hard_failed": self.hard_failed,
             "passed": self.passed_names,
             "failed": self.failed_names,
             "checks": [
@@ -135,6 +159,7 @@ class BehaviorReport:
                     "passed": check.passed,
                     "detail": check.detail,
                     "band": check.band,
+                    "hard": check.hard,
                 }
                 for check in self.checks
             ],
@@ -351,7 +376,88 @@ def grade_trace(trace: AgentTrace) -> BehaviorReport:
             band="policy",
         )
     )
+    anchor = _outcome_anchor(trace, report)
+    if anchor is not None:
+        report.checks.append(anchor)
     return report
+
+
+_STOPWORDS = frozenset(
+    """
+    a an the and or but for with from into onto over under that this these those
+    is are was were be been being it its as at by in on of to up out off not no
+    do does did doing done has have had after before when while then than so
+    still keeps keep back again always never just only also now
+    fix fixes fixed fixing make makes add adds update updates change changes
+    check checks run runs use uses using please need needs should would could
+    bug bugs issue issues problem problems error errors fail fails failing failed
+    failure succeeded successful success works working work get gets
+    """.split()
+)
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+_CAMEL_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
+_EDIT_TEXT_KEYS = ("old_string", "new_string", "content", "contents", "old", "new")
+
+
+def _terms(text: str) -> set[str]:
+    """Distinctive lowercase 5-char stems; splits paths, snake_case and camelCase."""
+    out: set[str] = set()
+    for word in _WORD_RE.findall(text or ""):
+        for part in _CAMEL_RE.findall(word):
+            lowered = part.lower()
+            if len(lowered) < 3 or lowered in _STOPWORDS:
+                continue
+            out.add(lowered[:5])
+    return out
+
+
+def _change_text(trace: AgentTrace) -> str:
+    """What the change was about: files touched, outcome summary, edit intent."""
+    parts = list(trace.files_touched)
+    parts.append(trace.outcome.summary)
+    for event in trace.events:
+        if event.type is not EventType.ASSISTANT:
+            continue
+        parts.append(event.content)
+        for call in event.tool_calls:
+            if is_edit_tool(call.name):
+                parts.append(str(call.arguments.get("path") or call.arguments.get("file") or ""))
+                parts.extend(str(call.arguments.get(key) or "") for key in _EDIT_TEXT_KEYS)
+    return "\n".join(part for part in parts if part)
+
+
+def _outcome_anchor(trace: AgentTrace, report: BehaviorReport) -> CheckResult | None:
+    """Did the change address what was asked? Two cheap, deterministic tests."""
+    policy = [check for check in report.checks if check.band == "policy"]
+    if (
+        trace.outcome.failed
+        and len(policy) >= MIN_POLICY_CHECKS_FOR_CONTRADICTION
+        and report.policy_score >= HIGH_POLICY_SCORE
+    ):
+        return CheckResult(
+            "outcome_anchored",
+            False,
+            f"contradiction: outcome is failure but policy score is {report.policy_score:.0%}"
+            " — the process looked clean and the task still was not done",
+            band="outcome",
+            hard=True,
+        )
+
+    task_terms = _terms(trace.task)
+    evidence_text = _change_text(trace)
+    if not task_terms or not (trace.files_touched or trace.outcome.summary.strip()):
+        return None
+    shared = task_terms & _terms(evidence_text)
+    coverage = len(shared) / len(task_terms)
+    anchored = bool(shared) and coverage >= MIN_ANCHOR_COVERAGE
+    return CheckResult(
+        "outcome_anchored",
+        anchored,
+        f"{len(shared)}/{len(task_terms)} task terms reappear in the change"
+        + (f" ({', '.join(sorted(shared))})" if shared else "")
+        + ("" if anchored else " — change does not appear to address the task"),
+        band="outcome",
+    )
 
 
 def grade_delta(before: AgentTrace | BehaviorReport, after: AgentTrace | BehaviorReport) -> GradeDelta:

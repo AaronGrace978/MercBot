@@ -233,3 +233,96 @@ def _alias_trace(explore: str, read: str, edit: str, verify: str) -> AgentTrace:
             TraceEvent(type=EventType.TOOL, tool_name=verify, content="passed"),
         ],
     )
+
+
+def _clean_process_trace(
+    *,
+    task: str,
+    status: OutcomeStatus,
+    summary: str,
+    files: list[str],
+    edit_path: str = "src/lib/session.ts",
+) -> AgentTrace:
+    trace = _alias_trace("grep", "read", "search_replace", "shell")
+    events = [TraceEvent(type=EventType.USER, content=task), *trace.events]
+    for event in events:
+        for call in event.tool_calls:
+            if call.name == "search_replace":
+                call.arguments["path"] = edit_path
+    return trace.model_copy(
+        update={
+            "task": task,
+            "files_touched": files,
+            "events": events,
+            "outcome": TraceOutcome(status=status, summary=summary),
+        }
+    )
+
+
+def _check(report, name):
+    return next(check for check in report.checks if check.name == name)
+
+
+def test_anchor_passes_when_change_matches_task():
+    report = grade_trace(frontier_auth_fix())
+    anchor = _check(report, "outcome_anchored")
+    assert anchor.passed
+    assert anchor.band == "outcome"
+    assert not report.hard_failed
+
+
+def test_anchor_fails_when_change_drifts_from_task():
+    trace = _clean_process_trace(
+        task="Fix the billing invoice rounding error",
+        status=OutcomeStatus.SUCCESS,
+        summary="Reworded the changelog.",
+        files=["docs/CHANGELOG.md"],
+        edit_path="docs/CHANGELOG.md",
+    )
+    report = grade_trace(trace)
+    anchor = _check(report, "outcome_anchored")
+    assert not anchor.passed
+    assert not anchor.hard
+    assert "does not appear to address" in anchor.detail
+    assert not report.hard_failed
+    assert report.score > 0.0
+
+
+def test_failure_with_high_policy_score_is_a_hard_contradiction():
+    trace = _clean_process_trace(
+        task="Login keeps redirecting back to /login",
+        status=OutcomeStatus.FAILURE,
+        summary="Patched the session cookie for the login redirect.",
+        files=["src/lib/session.ts"],
+    )
+    report = grade_trace(trace)
+    assert report.policy_score >= 0.8
+    anchor = _check(report, "outcome_anchored")
+    assert not anchor.passed and anchor.hard
+    assert "contradiction" in anchor.detail
+    assert report.hard_failed
+    assert report.score == 0.0
+    assert report.as_dict()["hard_failed"] is True
+    assert "HARD FAIL" in report.summary()
+
+
+def test_failure_with_low_policy_score_is_not_a_contradiction():
+    report = grade_trace(lesser_auth_fail())
+    assert not report.hard_failed
+    assert _check(report, "outcome_anchored").passed
+
+
+def test_anchor_skipped_without_anything_to_compare():
+    trace = AgentTrace(id="empty", model="gpt-4o-mini", task="Fix the login redirect")
+    assert "outcome_anchored" not in {check.name for check in grade_trace(trace).checks}
+
+
+def test_failure_with_too_few_policy_checks_is_not_a_contradiction():
+    trace = AgentTrace(
+        id="thin",
+        model="gpt-4o-mini",
+        task="Fix the login redirect",
+        outcome=TraceOutcome(status=OutcomeStatus.FAILURE, summary="gave up on login redirect"),
+    )
+    report = grade_trace(trace)
+    assert not report.hard_failed
