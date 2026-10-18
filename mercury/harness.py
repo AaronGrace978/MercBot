@@ -38,8 +38,10 @@ class MercuryHarness:
         allow_student_success: bool = False,
         min_confidence: float = 0.3,
         card_validator: CardValidatorProtocol | None = None,
+        stale_after_days: float | None = 30.0,
     ) -> None:
         self.store = KnowledgeStore(path)
+        self.store.stale_after_days = stale_after_days
         self.embedder: EmbedderProtocol = embedder or HashingEmbedder()
         self.teacher_tiers = teacher_tiers
         self.student_tiers = student_tiers

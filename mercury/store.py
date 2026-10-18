@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from mercury.embed import BM25Index
-from mercury.models import AgentTrace, OperationalCard
+from mercury.models import AgentTrace, CardKind, OperationalCard
 from mercury.traceio import parse_trace
+
+STALE_AFTER_DAYS = 30.0
+STALE_CONFIDENCE_FACTOR = 0.5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS traces (
@@ -56,6 +59,7 @@ class KnowledgeStore:
         self._conn.commit()
         self._cards_cache: list[tuple[OperationalCard, list[float] | None]] | None = None
         self._bm25_cache: BM25Index | None = None
+        self.stale_after_days: float | None = STALE_AFTER_DAYS
 
     def _invalidate_cache(self) -> None:
         self._cards_cache = None
@@ -152,6 +156,7 @@ class KnowledgeStore:
                 continue
             card = OperationalCard.model_validate_json(row["json"])
             card.uses += 1
+            card.last_used_at = datetime.now(timezone.utc).isoformat()
             if succeeded:
                 card.successes += 1
             else:
@@ -159,6 +164,62 @@ class KnowledgeStore:
             embedding = json.loads(row["embedding"]) if row["embedding"] else None
             self.put_card(card, embedding)
             updated += 1
+        return updated
+
+    def mark_used(self, card_ids: Iterable[str], *, now: datetime | None = None) -> int:
+        """Stamp cards as retrieved/used so they are not treated as stale."""
+        stamp = (now or datetime.now(timezone.utc)).isoformat()
+        return self._rewrite_cards(
+            {cid: (lambda card: setattr(card, "last_used_at", stamp)) for cid in set(card_ids)}
+        )
+
+    def decay_stale(
+        self,
+        *,
+        days: float | None = None,
+        now: datetime | None = None,
+    ) -> list[str]:
+        """Halve the confidence of cards idle for `days` (default 30); returns decayed ids.
+
+        Idle time runs from the latest of creation, last retrieval/use and the last decay,
+        so a card loses half its confidence once per idle window, never on every call.
+        Standing orders are recomputed from teacher traces and are exempt.
+        """
+        window = self.stale_after_days if days is None else days
+        if not window or window <= 0:
+            return []
+        current = now or datetime.now(timezone.utc)
+        cutoff = timedelta(days=window)
+        stamp = current.isoformat()
+        stale = [
+            card.id
+            for card, _ in self.cards_with_embeddings()
+            if card.kind is not CardKind.STANDING_ORDER and current - card.last_active_at() >= cutoff
+        ]
+
+        def decay(card: OperationalCard) -> None:
+            card.confidence = round(card.confidence * STALE_CONFIDENCE_FACTOR, 4)
+            card.last_decayed_at = stamp
+
+        self._rewrite_cards({cid: decay for cid in stale})
+        return stale
+
+    def _rewrite_cards(self, edits: dict[str, Callable[[OperationalCard], None]]) -> int:
+        updated = 0
+        for cid, edit in edits.items():
+            row = self._conn.execute("SELECT json FROM cards WHERE id = ?", (cid,)).fetchone()
+            if row is None:
+                continue
+            card = OperationalCard.model_validate_json(row["json"])
+            edit(card)
+            self._conn.execute(
+                "UPDATE cards SET json = ?, confidence = ? WHERE id = ?",
+                (card.model_dump_json(), card.confidence, cid),
+            )
+            updated += 1
+        if updated:
+            self._conn.commit()
+            self._invalidate_cache()
         return updated
 
     def cards(self) -> list[OperationalCard]:

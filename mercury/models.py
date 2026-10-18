@@ -139,6 +139,21 @@ class OperationalCard(BaseModel):
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
+    last_used_at: str | None = None
+    last_decayed_at: str | None = None
+
+    def last_active_at(self) -> datetime:
+        """Most recent of creation, retrieval/use, or the last staleness decay."""
+        stamps: list[datetime] = []
+        for raw in (self.created_at, self.last_used_at, self.last_decayed_at):
+            if not raw:
+                continue
+            try:
+                parsed = datetime.fromisoformat(raw)
+            except ValueError:
+                continue
+            stamps.append(parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc))
+        return max(stamps) if stamps else datetime.now(timezone.utc)
 
     @property
     def reinforcement_bonus(self) -> float:

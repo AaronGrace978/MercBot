@@ -179,6 +179,7 @@ def build_pack(
             rejected_pathways=list(rejected_pathways or []),
         )
 
+    store.decay_stale()
     scored = retrieve(
         store,
         task,
@@ -190,6 +191,7 @@ def build_pack(
         limit=24,
     )
     selected = _fit_budget(scored, budget)
+    store.mark_used(item.card.id for item in selected)
 
     collected_rejected: list[str] = list(rejected_pathways or [])
     # Also surface rejected file variations from failed traces in the store
