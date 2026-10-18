@@ -117,8 +117,8 @@ PROVIDER_META: dict[ProviderId, dict[str, str]] = {
 }
 
 
-class FrontierModelSpec(BaseModel):
-    """Metadata and connection profile for a verified Frontier-tier model."""
+class ModelSpec(BaseModel):
+    """Connection profile shared by every model the runtime can call."""
 
     id: str
     name: str
@@ -134,6 +134,10 @@ class FrontierModelSpec(BaseModel):
     is_ollama_cloud: bool = False
     featured: bool = False
 
+
+class FrontierModelSpec(ModelSpec):
+    """Metadata and connection profile for a verified Frontier-tier model."""
+
     @model_validator(mode="after")
     def _enforce_frontier_tier(self) -> "FrontierModelSpec":
         detected = classify_model(self.id)
@@ -143,6 +147,12 @@ class FrontierModelSpec(BaseModel):
                 "Mercury Agent Runtime strictly permits FRONTIER models only."
             )
         return self
+
+
+class StudentModelSpec(ModelSpec):
+    """Connection profile for a non-frontier model run as an A/B student."""
+
+    tier: ModelTier = ModelTier.LESSER
 
 
 # Curated Frontier-Only Model Catalog.
@@ -506,6 +516,39 @@ def get_frontier_model(model_id: str) -> FrontierModelSpec:
         default_endpoint=meta["default_endpoint"],
         is_ollama_cloud=(provider is ProviderId.OLLAMA_CLOUD),
     )
+
+
+def get_student_model(model_id: str) -> StudentModelSpec:
+    """Resolve a lesser/capable model for an A/B run; frontier models are rejected."""
+    cleaned = (model_id or "").strip()
+    if not cleaned:
+        raise ValueError("Model ID cannot be empty.")
+    tier = classify_model(cleaned)
+    if tier is ModelTier.FRONTIER:
+        raise ValueError(f"'{cleaned}' is a frontier model; use get_frontier_model.")
+    provider = _infer_provider(cleaned.lower())
+    meta = PROVIDER_META[provider]
+    return StudentModelSpec(
+        id=cleaned,
+        name=cleaned,
+        provider=provider,
+        provider_label=meta["name"],
+        api_model=cleaned,
+        tier=tier,
+        context_window=128_000,
+        tagline=f"{meta['name']} student model (tier={tier.value}).",
+        specialties=[provider.value, tier.value],
+        env_key=meta["env_key"],
+        default_endpoint=meta["default_endpoint"],
+        is_ollama_cloud=(provider is ProviderId.OLLAMA_CLOUD),
+    )
+
+
+def resolve_model_spec(model_id: str) -> ModelSpec:
+    """Frontier spec when the model is frontier, otherwise a student spec."""
+    if classify_model(model_id) is ModelTier.FRONTIER:
+        return get_frontier_model(model_id)
+    return get_student_model(model_id)
 
 
 def _infer_provider(lowered_model: str) -> ProviderId:

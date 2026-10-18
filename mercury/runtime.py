@@ -43,6 +43,7 @@ from mercury.models import (
 from mercury.phases import segment_phases
 from mercury.providers import (
     FrontierModelSpec,
+    ModelSpec,
     FrontierOnlyError,
     NetworkDropError,
     _is_network_drop_error,
@@ -51,6 +52,7 @@ from mercury.providers import (
     has_live_credentials,
     list_frontier_models,
     resolve_fallback_titan_spec,
+    resolve_model_spec,
 )
 
 
@@ -359,7 +361,7 @@ class AgentRunResult:
     """Complete telemetry and Mercury flywheel output from a Frontier Agent Runtime run."""
 
     trace: AgentTrace
-    model_spec: FrontierModelSpec
+    model_spec: ModelSpec
     grade: BehaviorReport
     distilled_cards: list[OperationalCard] = field(default_factory=list)
     injected_pack: OperatingPack | None = None
@@ -498,7 +500,7 @@ class MercuryAgentRuntime:
 
     def assemble_system_prompt(
         self,
-        spec: FrontierModelSpec,
+        spec: ModelSpec,
         task: str,
         *,
         pack: OperatingPack | None = None,
@@ -623,10 +625,17 @@ class MercuryAgentRuntime:
         api_keys: dict[str, str] | None = None,
         inject_pack: bool = True,
         auto_capture: bool = True,
+        control: bool = False,
+        allow_student: bool = False,
         on_event: Callable[[TraceEvent], None] | None = None,
         on_stream: Callable[[dict[str, Any]], None] | None = None,
     ) -> AgentRunResult:
-        """Execute a frontier agent run on `task` and feed the trace into the Mercury flywheel."""
+        """Execute a frontier agent run on `task` and feed the trace into the Mercury flywheel.
+
+        ``control=True`` is the A/B control arm: no system prompt, no operating pack,
+        no recovery injection and no capture into the store. ``allow_student=True``
+        lifts the frontier-only gate so a lesser model can be the subject.
+        """
         start_ts = time.perf_counter()
         if workspace_root is not None:
             resolved_ws = Path(workspace_root).resolve()
@@ -634,8 +643,11 @@ class MercuryAgentRuntime:
             self.workspace_root = resolved_ws
             self.toolbox = WorkspaceToolbox(self.workspace_root, allow_writes=self.toolbox.allow_writes)
         target_model = model or self.default_model_spec.id
-        # Gate: strictly FRONTIER models only
-        spec = get_frontier_model(target_model)
+        # Gate: strictly FRONTIER models only, unless running a student for an A/B comparison
+        spec = resolve_model_spec(target_model) if allow_student else get_frontier_model(target_model)
+        if control:
+            inject_pack = False
+            auto_capture = False
 
         # Build an operating pack from existing store knowledge (with a 2400 token budget
         # so cross-frontier standing orders, decisions, and recovery cards are visible)
@@ -711,6 +723,7 @@ class MercuryAgentRuntime:
                     api_keys=api_keys,
                     on_event=on_event,
                     on_stream=on_stream,
+                    control=control,
                 )
                 mode_used = str(trace.metadata.get("mode") or "live")
             except Exception as live_exc:
@@ -844,20 +857,19 @@ class MercuryAgentRuntime:
     def _run_live_loop(
         self,
         *,
-        spec: FrontierModelSpec,
+        spec: ModelSpec,
         task: str,
         pack: OperatingPack | None,
         max_steps: int,
         api_keys: dict[str, str] | None,
         on_event: Callable[[TraceEvent], None] | None,
         on_stream: Callable[[dict[str, Any]], None] | None = None,
+        control: bool = False,
     ) -> tuple[AgentTrace, str, list[str]]:
-        system_prompt = self.assemble_system_prompt(spec, task, pack=pack)
-
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": task},
-        ]
+        messages: list[dict[str, Any]] = []
+        if not control:
+            messages.append({"role": "system", "content": self.assemble_system_prompt(spec, task, pack=pack)})
+        messages.append({"role": "user", "content": task})
         events: list[TraceEvent] = []
         recoveries: list[str] = []
         offline_fallback_used = False
@@ -940,7 +952,7 @@ class MercuryAgentRuntime:
                     )
 
                 # Refresh system prompt with updated # REJECTED PATHWAYS whenever a tool errors
-                if is_err:
+                if is_err and not control:
                     messages[0]["content"] = self.assemble_system_prompt(spec, task, pack=pack)
                     sig = error_signature(output) or f"{tc.name} error"
                     rec_pack = build_pack(
@@ -999,7 +1011,7 @@ class MercuryAgentRuntime:
     def _run_synth_loop(
         self,
         *,
-        spec: FrontierModelSpec,
+        spec: ModelSpec,
         task: str,
         pack: OperatingPack | None,
         on_event: Callable[[TraceEvent], None] | None,

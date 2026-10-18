@@ -96,8 +96,17 @@ def main(argv: list[str] | None = None) -> int:
     run_cmd.add_argument("--task", required=True, help="Task for the frontier agent runtime")
     run_cmd.add_argument(
         "--model",
-        default="gemini-4-argon-high",
-        help="Frontier model ID (default: gemini-4-argon-high)",
+        default=None,
+        help="Model ID (default: gemini-4-argon-high; gpt-4o-mini with --no-pack)",
+    )
+    run_cmd.add_argument(
+        "--no-pack",
+        action="store_true",
+        help=(
+            "Control group: run the identical task twice, once with the Mercury prompt and pack and once "
+            "with no system prompt, each in its own workspace copy. Prints both grades side by side and "
+            "appends them to <store>/ab_log.jsonl. Accepts lesser/capable models."
+        ),
     )
     run_cmd.add_argument(
         "--mode",
@@ -266,7 +275,19 @@ def main(argv: list[str] | None = None) -> int:
         from mercury.runtime import MercuryAgentRuntime
 
         runtime = MercuryAgentRuntime(harness, store_path=args.store)
-        result = runtime.run(args.task, model=args.model, mode=args.mode)
+        if args.no_pack:
+            from mercury.ab import run_ab
+
+            ab = run_ab(runtime, args.task, model=args.model or "gpt-4o-mini", mode=args.mode)
+            log_path = ab.log(args.store)
+            if args.json:
+                json.dump(ab.as_dict(), sys.stdout, indent=2, default=str)
+                sys.stdout.write("\n")
+            else:
+                print(ab.summary())
+                print(f"Logged to {log_path}")
+            return 0
+        result = runtime.run(args.task, model=args.model or "gemini-4-argon-high", mode=args.mode)
         if args.json:
             json.dump(result.as_dict(), sys.stdout, indent=2, default=str)
             sys.stdout.write("\n")
