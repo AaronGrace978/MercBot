@@ -750,6 +750,8 @@ class MercuryAgentRuntime:
         if auto_capture:
             self.harness.capture(trace, force_teacher=True)
             distilled = distill_trace(trace, teacher=True)
+            if self.harness.card_validator is not None:
+                distilled = [c for c in distilled if self.harness.store.get_card(c.id) is not None]
 
         grade = grade_trace(trace)
         live_built_app: dict[str, Any] | None = None

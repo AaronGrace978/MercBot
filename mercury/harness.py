@@ -9,10 +9,13 @@ from mercury.contrast import contrast_traces
 from mercury.distill import distill_standing_orders, distill_trace
 from mercury.embed import EmbedderProtocol, HashingEmbedder
 from mercury.inject import OperatingPack, build_pack
-from mercury.models import AgentTrace, OperationalCard
+from mercury.models import AgentTrace, CardKind, OperationalCard
 from mercury.store import KnowledgeStore
 from mercury.tiers import ModelTier, is_teacher_tier
 from mercury.traceio import load_trace, parse_trace
+from mercury.validate import CardValidation, CardValidatorProtocol, Verdict
+
+UNCONFIRMED_CONFIDENCE_FACTOR = 0.5
 
 
 class MercuryHarness:
@@ -34,6 +37,7 @@ class MercuryHarness:
         student_tiers: tuple[ModelTier, ...] = (ModelTier.LESSER, ModelTier.CAPABLE),
         allow_student_success: bool = False,
         min_confidence: float = 0.3,
+        card_validator: CardValidatorProtocol | None = None,
     ) -> None:
         self.store = KnowledgeStore(path)
         self.embedder: EmbedderProtocol = embedder or HashingEmbedder()
@@ -41,6 +45,8 @@ class MercuryHarness:
         self.student_tiers = student_tiers
         self.allow_student_success = allow_student_success
         self.min_confidence = min_confidence
+        self.card_validator = card_validator
+        self.last_validation: list[CardValidation] = []
 
     @classmethod
     def init(cls, path: str | Path = ".mercury", **kwargs: Any) -> "MercuryHarness":
@@ -155,12 +161,56 @@ class MercuryHarness:
             return True
         return False
 
+    def validation_summary(self) -> dict[str, int]:
+        """Counts for the most recent validation gate pass."""
+        counts = {verdict.value: 0 for verdict in Verdict}
+        for item in self.last_validation:
+            counts[item.verdict.value] += 1
+        return counts
+
     def _embed_cards(self, cards: list[OperationalCard]) -> None:
+        cards = self._validate_cards(cards)
         for card in cards:
             if card.confidence < self.min_confidence:
                 continue
             embedding = self.embedder.embed(card.searchable_text())
             self.store.put_card(card, embedding)
+
+    def _validate_cards(self, cards: list[OperationalCard]) -> list[OperationalCard]:
+        """Gate new cards on a teacher check against their source trace.
+
+        Rejected cards are dropped. Cards the teacher cannot confirm are kept but
+        flagged and have their confidence halved. Standing orders aggregate many
+        traces, so no single trace can confirm them; they bypass the gate.
+        """
+        self.last_validation = []
+        if self.card_validator is None:
+            return cards
+        kept: list[OperationalCard] = []
+        for card in cards:
+            if card.kind is CardKind.STANDING_ORDER:
+                kept.append(card)
+                continue
+            existing = self.store.get_card(card.id)
+            if existing is not None and existing.metadata.get("validation") == Verdict.CONFIRMED.value:
+                card.metadata["validation"] = Verdict.CONFIRMED.value
+                kept.append(card)
+                continue
+            counterpart_id = card.metadata.get("student_trace_id")
+            result = self.card_validator.validate(
+                card,
+                self.store.get_trace(card.source_trace_id),
+                self.store.get_trace(str(counterpart_id)) if counterpart_id else None,
+            )
+            self.last_validation.append(result)
+            if result.verdict is Verdict.REJECTED:
+                continue
+            card.metadata["validation"] = result.verdict.value
+            if result.verdict is Verdict.UNCONFIRMED:
+                card.metadata["validation_reason"] = result.reason
+                card.confidence = round(card.confidence * UNCONFIRMED_CONFIDENCE_FACTOR, 4)
+            kept.append(card)
+        return kept
 
     def _refresh_standing_orders(self) -> None:
         teachers = [

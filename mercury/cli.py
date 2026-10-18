@@ -19,6 +19,16 @@ def main(argv: list[str] | None = None) -> int:
         description="Capture frontier agent operations and embed them into lesser-model sessions.",
     )
     parser.add_argument("--store", default=".mercury", help="Knowledge store directory (default: .mercury)")
+    parser.add_argument(
+        "--validate-cards",
+        action="store_true",
+        help="Gate every new card on a teacher-model check against its source trace (one call per card)",
+    )
+    parser.add_argument(
+        "--teacher-model",
+        default="gemini-4-argon-high",
+        help="Frontier model used by --validate-cards (default: gemini-4-argon-high)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init", help="Create an empty knowledge store")
@@ -161,7 +171,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("bridge-worker", help="Persistent asynchronous stdio JSON-RPC worker process for desktop IPC")
 
     args = parser.parse_args(argv)
-    harness = MercuryHarness.init(args.store)
+    validator = None
+    if args.validate_cards:
+        from mercury.validate import TeacherCardValidator
+
+        validator = TeacherCardValidator(args.teacher_model)
+    harness = MercuryHarness.init(args.store, card_validator=validator)
 
     if args.command == "init":
         print(f"Initialized Mercury store at {Path(args.store).resolve()}")
@@ -172,11 +187,13 @@ def main(argv: list[str] | None = None) -> int:
         stats = harness.stats()
         print(f"Captured {trace.id} ({trace.model}, {trace.tier.value}, {trace.outcome.status.value})")
         print(f"Store now has {stats['traces']} traces and {stats['cards']} cards")
+        _print_validation(harness)
         return 0
 
     if args.command == "distill":
         count = harness.distill_all()
         print(f"Distilled {count} operational cards")
+        _print_validation(harness)
         return 0
 
     if args.command == "pack":
@@ -193,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "contrast":
         cards = harness.contrast(args.student, args.teacher)
         print(f"Wrote {len(cards)} contrastive/teacher cards")
+        _print_validation(harness)
         return 0
 
     if args.command == "grade":
@@ -399,6 +417,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     return 1
+
+
+def _print_validation(harness: MercuryHarness) -> None:
+    if harness.card_validator is None:
+        return
+    counts = harness.validation_summary()
+    print(
+        f"Card validation: {counts['confirmed']} confirmed, "
+        f"{counts['unconfirmed']} flagged (confidence halved), {counts['rejected']} discarded"
+    )
 
 
 def _print_pack(pack, fmt: str) -> None:
