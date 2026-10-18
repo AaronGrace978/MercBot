@@ -1,13 +1,15 @@
 import pytest
 
-from mercury.providers import (
+pytest.importorskip("mercury_forge")
+
+from mercury_runtime.providers import (
     FrontierOnlyError,
     ProviderId,
     get_frontier_model,
     list_frontier_models,
 )
-from mercury.runtime import MercuryAgentRuntime
-from mercury.server import MercuryBridge
+from mercury_runtime.runtime import MercuryAgentRuntime
+from mercury_forge.server import MercuryBridge
 from mercury.tiers import ModelTier, classify_model
 
 
@@ -104,7 +106,7 @@ def test_bridge_state_and_operations(tmp_path):
 
 
 def test_app_templates_and_build_forge(tmp_path):
-    from mercury.templates import infer_template_from_prompt, list_build_templates, list_built_apps
+    from mercury_forge.templates import infer_template_from_prompt, list_build_templates, list_built_apps
 
     templates = list_build_templates()
     template_ids = {t.id for t in templates}
@@ -164,7 +166,7 @@ def test_app_templates_and_build_forge(tmp_path):
 def test_stateful_iteration_limiter_and_soft_pivot(tmp_path):
     """Verify >3 sequential edits with >50% line overlap throws IterationLimitExceededError."""
     from mercury.models import ToolCall
-    from mercury.runtime import IterationLimitExceededError, compute_line_overlap
+    from mercury_runtime.runtime import IterationLimitExceededError, compute_line_overlap
 
     runtime = MercuryAgentRuntime(
         store_path=tmp_path / ".mercury",
@@ -215,7 +217,7 @@ def test_stateful_iteration_limiter_and_soft_pivot(tmp_path):
 
 def test_prompt_driven_reject_buffer_injection(tmp_path):
     """Verify # REJECTED PATHWAYS section is dynamically injected into frontier system prompts."""
-    from mercury.providers import get_frontier_model
+    from mercury_runtime.providers import get_frontier_model
 
     runtime = MercuryAgentRuntime(
         store_path=tmp_path / ".mercury",
@@ -285,8 +287,8 @@ def test_specification_anchored_verification_in_build_pipeline(tmp_path):
 
 def test_offline_mode_enforcement_fallback_routing(tmp_path, monkeypatch):
     """Verify network drops on primary cloud endpoints route seamlessly to Ollama Cloud / Local Titan."""
-    import mercury.providers as providers
-    from mercury.providers import NetworkDropError, call_frontier_provider, get_frontier_model
+    import mercury_runtime.providers as providers
+    from mercury_runtime.providers import NetworkDropError, call_frontier_provider, get_frontier_model
 
     spec = get_frontier_model("gemini-4-argon-high")
 
@@ -359,8 +361,8 @@ def test_prompt_driven_app_synthesis_builds_requested_app(tmp_path):
 
 def test_webgl_prompt_builds_the_named_subject():
     """A 3D prompt must build the named subject, not the generic core mesh."""
-    from mercury.prompt_forge import _build_webgl_3d_files
-    from mercury.webgl_subject import resolve_webgl_subject
+    from mercury_forge.prompt_forge import _build_webgl_3d_files
+    from mercury_forge.webgl_subject import resolve_webgl_subject
 
     chicken = resolve_webgl_subject("Build a 3d Chicken in WebGL")
     assert chicken["family"] == "bird"
@@ -390,8 +392,8 @@ def test_webgl_prompt_builds_the_named_subject():
 
 def test_landing_page_prompt_is_not_crud_domain_studio(tmp_path):
     """Landing / generative UI prompts must ship a real marketing page, not the CRUD stub."""
-    from mercury.prompt_forge import detect_prompt_archetype
-    from mercury.runtime import MercuryAgentRuntime
+    from mercury_forge.prompt_forge import detect_prompt_archetype
+    from mercury_runtime.runtime import MercuryAgentRuntime
 
     assert (
         detect_prompt_archetype(
@@ -423,7 +425,7 @@ def test_landing_page_prompt_is_not_crud_domain_studio(tmp_path):
 
 def test_live_workspace_edits_auto_sync_bundle_preview(tmp_path):
     """Verify bundle.preview.html and mercbot.app.json recompile when index.html/app.js are updated on disk."""
-    from mercury.templates import list_built_apps, sync_workspace_manifest
+    from mercury_forge.templates import list_built_apps, sync_workspace_manifest
 
     runtime = MercuryAgentRuntime(
         store_path=tmp_path / ".mercury",

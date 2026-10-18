@@ -21,7 +21,7 @@ from mercury.grade import BehaviorReport, grade_delta
 from mercury.tiers import ModelTier, classify_model
 
 if TYPE_CHECKING:
-    from mercury.runtime import AgentRunResult, MercuryAgentRuntime
+    from mercury_runtime.runtime import AgentRunResult, MercuryAgentRuntime
 
 AB_LOG_NAME = "ab_log.jsonl"
 _SANDBOX_IGNORE = (

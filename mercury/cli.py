@@ -11,7 +11,21 @@ from mercury.demo import frontier_auth_fix, frontier_pytest_fix, lesser_auth_fai
 from mercury.harness import MercuryHarness
 
 
+_OPTIONAL_DISTS = {"mercury_runtime": "mercury-runtime", "mercury_forge": "mercury-forge"}
+
+
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except ModuleNotFoundError as exc:
+        dist = _OPTIONAL_DISTS.get((exc.name or "").split(".")[0])
+        if dist is None:
+            raise
+        print(f"error: this command needs {dist}; install it with `pip install {dist}`", file=sys.stderr)
+        return 2
+
+
+def _main(argv: list[str] | None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(
@@ -182,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     validator = None
     if args.validate_cards:
-        from mercury.validate import TeacherCardValidator
+        from mercury_runtime.teacher import TeacherCardValidator
 
         validator = TeacherCardValidator(args.teacher_model)
     harness = MercuryHarness.init(args.store, card_validator=validator)
@@ -258,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run_demo(harness, as_json=args.json)
 
     if args.command == "models":
-        from mercury.providers import list_frontier_models
+        from mercury_runtime.providers import list_frontier_models
 
         models = list_frontier_models(args.provider)
         if args.json:
@@ -272,11 +286,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "run":
-        from mercury.runtime import MercuryAgentRuntime
+        from mercury_runtime.runtime import MercuryAgentRuntime
 
         runtime = MercuryAgentRuntime(harness, store_path=args.store)
         if args.no_pack:
-            from mercury.ab import run_ab
+            from mercury_runtime.ab import run_ab
 
             ab = run_ab(runtime, args.task, model=args.model or "gpt-4o-mini", mode=args.mode)
             log_path = ab.log(args.store)
@@ -300,7 +314,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "templates":
-        from mercury.templates import list_build_templates
+        from mercury_forge.templates import list_build_templates
 
         templates = list_build_templates()
         if args.json:
@@ -314,8 +328,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "build":
-        from mercury.runtime import MercuryAgentRuntime
-        from mercury.templates import infer_template_from_prompt, launch_built_app
+        from mercury_runtime.runtime import MercuryAgentRuntime
+        from mercury_forge.templates import infer_template_from_prompt, launch_built_app
 
         tpl_id = args.template
         proj_name = args.name
@@ -328,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.spec:
             spec_src = Path(args.spec)
             if spec_src.is_file():
-                from mercury.templates import _slugify, get_build_template
+                from mercury_forge.templates import _slugify, get_build_template
 
                 tmpl_obj = get_build_template(tpl_id)
                 slug = _slugify(proj_name or tmpl_obj.name)
@@ -365,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "launch":
-        from mercury.templates import launch_built_app, list_built_apps
+        from mercury_forge.templates import launch_built_app, list_built_apps
 
         slug = args.app.strip()
         if not slug:
@@ -388,15 +402,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "serve":
-        from mercury.server import serve_http
+        from mercury_forge.server import serve_http
 
         harness.close()
         serve_http(host=args.host, port=args.port, store_path=args.store)
         return 0
 
     if args.command == "bridge":
-        from mercury.server import MercuryBridge
-        from mercury.templates import list_build_templates
+        from mercury_forge.server import MercuryBridge
+        from mercury_forge.templates import list_build_templates
 
         harness.close()
         bridge = MercuryBridge(store_path=args.store)
@@ -431,7 +445,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "bridge-worker":
-        from mercury.server import run_stdio_bridge_worker
+        from mercury_forge.server import run_stdio_bridge_worker
 
         harness.close()
         run_stdio_bridge_worker(store_path=args.store)

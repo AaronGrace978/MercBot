@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import difflib
 import fnmatch
+import importlib.util
 import re
 import subprocess
 import time
@@ -41,7 +42,7 @@ from mercury.models import (
     trace_id_for,
 )
 from mercury.phases import segment_phases
-from mercury.providers import (
+from mercury_runtime.providers import (
     FrontierModelSpec,
     ModelSpec,
     FrontierOnlyError,
@@ -54,6 +55,11 @@ from mercury.providers import (
     resolve_fallback_titan_spec,
     resolve_model_spec,
 )
+
+
+def forge_available() -> bool:
+    """The application forge is an optional add-on; the runtime works without it."""
+    return importlib.util.find_spec("mercury_forge") is not None
 
 
 class IterationLimitExceededError(Exception):
@@ -595,7 +601,9 @@ class MercuryAgentRuntime:
         on_stream: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         """Scaffold, customize, and verify an application from a build template."""
-        from mercury.templates import build_app_from_template
+        if not forge_available():
+            raise RuntimeError("Application templates need the forge add-on: pip install mercury-forge")
+        from mercury_forge.templates import build_app_from_template
 
         target_model = model or self.default_model_spec.id
         artifact, trace, grade, cards = build_app_from_template(
@@ -664,7 +672,7 @@ class MercuryAgentRuntime:
             )
 
         # If the user task is an application build request, scaffold & verify a real app in workspaces/
-        is_build_request = bool(
+        is_build_request = forge_available() and bool(
             re.search(
                 r"^\s*(?:please\s+)?(?:build|create|forge|scaffold|generate|make|design)\b|"
                 r"\b(?:build|create|forge|scaffold|make|design)\s+(?:me\s+)?(?:a|an|the)?\s*"
@@ -675,7 +683,7 @@ class MercuryAgentRuntime:
             )
         )
         if is_build_request and mode != "live":
-            from mercury.templates import build_app_from_template, infer_template_from_prompt
+            from mercury_forge.templates import build_app_from_template, infer_template_from_prompt
 
             tpl_id, proj_title = infer_template_from_prompt(task)
             artifact, trace, grade, distilled = build_app_from_template(
@@ -772,10 +780,10 @@ class MercuryAgentRuntime:
             for tc in ev.tool_calls or []:
                 if tc.name in ("write_file", "edit_file"):
                     raw_p = str(tc.arguments.get("path") or "").replace("\\", "/").lstrip("./")
-                    if raw_p.startswith("workspaces/"):
+                    if raw_p.startswith("workspaces/") and forge_available():
                         parts = raw_p.split("/")
                         if len(parts) >= 2 and parts[1]:
-                            from mercury.templates import sync_workspace_manifest
+                            from mercury_forge.templates import sync_workspace_manifest
 
                             ws_dir = self.workspace_root / "workspaces" / parts[1]
                             synced = sync_workspace_manifest(ws_dir, force_recompile=True)
@@ -783,7 +791,7 @@ class MercuryAgentRuntime:
                                 live_built_app = synced
 
         if is_build_request and live_built_app is None:
-            from mercury.templates import build_app_from_template, infer_template_from_prompt
+            from mercury_forge.templates import build_app_from_template, infer_template_from_prompt
 
             tpl_id, proj_title = infer_template_from_prompt(task)
             artifact, _, _, _ = build_app_from_template(

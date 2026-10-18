@@ -17,13 +17,13 @@ from mercury.grade import grade_delta, grade_trace
 from mercury.harness import MercuryHarness
 from mercury.inject import build_pack
 from mercury.phases import segment_phases
-from mercury.providers import (
+from mercury_runtime.providers import (
     FrontierOnlyError,
     list_frontier_models,
     list_providers,
 )
-from mercury.runtime import MercuryAgentRuntime
-from mercury.templates import (
+from mercury_runtime.runtime import MercuryAgentRuntime
+from mercury_forge.templates import (
     build_app_from_template,
     infer_template_from_prompt,
     launch_built_app,

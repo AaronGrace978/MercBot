@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
-from mercury.providers import FrontierModelSpec, call_frontier_provider, live_model_route
+from mercury_runtime.providers import FrontierModelSpec, call_frontier_provider, live_model_route
 
 SYNTHESIS_TIMEOUT_S = 420.0
 SYNTHESIS_MAX_OUTPUT_TOKENS = 32000

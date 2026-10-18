@@ -95,10 +95,23 @@ uv run python -m mercury build \
 
 ### 1. Install the Python Runtime
 
+The repo ships three installable packages. Adopt only the layers you need:
+
+| Package | Import | What it is | Depends on |
+| --- | --- | --- | --- |
+| `mercury-harness` (repo root) | `mercury` | The flywheel: trace capture, distillation, knowledge store, retrieval, operating packs, grading, card validation and decay. Also the `mercury` CLI. | `pydantic` |
+| `mercury-runtime` (`runtime/`) | `mercury_runtime` | Frontier agent runtime, provider adapters, teacher-model card validator, `--no-pack` A/B control group. | `mercury-harness` |
+| `mercury-forge` (`forge/`) | `mercury_forge` | Prompt-driven application forge, build templates, and the bridge server the desktop app talks to. | `mercury-runtime` |
+
 ```bash
-uv sync --extra dev
-# or: pip install -e ".[dev]"
+pip install -e .                                  # flywheel only
+pip install -e . -e ./runtime                     # + runtime
+pip install -e ".[dev]" -e ./runtime -e ./forge   # everything (what the desktop app and CI use)
 ```
+
+Dependencies point one way (flywheel <- runtime <- forge) and `tests/test_split.py` enforces it. The runtime
+picks the forge up at call time when it is installed; without it, "build me an app" tasks run as ordinary agent
+loops. CLI commands from a layer you have not installed exit with an install hint.
 
 Configure `.env` in the repo root for live provider execution:
 
@@ -189,7 +202,8 @@ print("Verification:", forged["artifact"]["verification_output"])
 ## Tests
 
 ```bash
-uv run --extra dev pytest
+pip install -e ".[dev]" -e ./runtime -e ./forge && python -m pytest
+# flywheel-only install: runtime/forge suites skip, the rest runs
 ```
 
 ---

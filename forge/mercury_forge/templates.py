@@ -34,10 +34,10 @@ from mercury.models import (
     TraceOutcome,
     trace_id_for,
 )
-from mercury.providers import FrontierModelSpec, get_frontier_model
+from mercury_runtime.providers import FrontierModelSpec, get_frontier_model
 
 if TYPE_CHECKING:
-    from mercury.runtime import MercuryAgentRuntime
+    from mercury_runtime.runtime import MercuryAgentRuntime
 
 
 class AppTemplateFile(BaseModel):
@@ -1400,7 +1400,7 @@ def build_app_from_template(
 
     brief = custom_prompt.strip() or display_name or tmpl.tagline
     if tmpl.id == "custom-prompt-app":
-        from mercury.prompt_forge import synthesize_prompt_driven_template
+        from mercury_forge.prompt_forge import synthesize_prompt_driven_template
 
         def _forge_progress(msg: str) -> None:
             if on_stream:
@@ -1418,7 +1418,7 @@ def build_app_from_template(
 
     task_desc = f"Build application '{display_name}' from template '{tmpl.id}': {brief}"
 
-    from mercury.runtime import WorkspaceToolbox
+    from mercury_runtime.runtime import WorkspaceToolbox
 
     app_toolbox = WorkspaceToolbox(base_dir, allow_writes=True)
     events: list[TraceEvent] = []

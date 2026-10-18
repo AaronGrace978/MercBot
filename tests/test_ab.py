@@ -2,12 +2,15 @@ import json
 
 import pytest
 
-from mercury import MercuryAgentRuntime, MercuryHarness
-from mercury.ab import AB_LOG_NAME, run_ab
+pytest.importorskip("mercury_runtime")
+
+from mercury import MercuryHarness
+from mercury_runtime import MercuryAgentRuntime
+from mercury_runtime.ab import AB_LOG_NAME, run_ab
 from mercury.cli import main
 from mercury.demo import frontier_auth_fix
 from mercury.models import ToolCall
-from mercury.providers import FrontierOnlyError, ProviderTurnResponse
+from mercury_runtime.providers import FrontierOnlyError, ProviderTurnResponse
 
 
 def _turn(*calls, text=""):
@@ -58,7 +61,7 @@ def _runtime(tmp_path):
 
 def test_control_arm_has_no_system_prompt_and_pack_arm_does(tmp_path, workspace, monkeypatch):
     fake = _FakeModel()
-    monkeypatch.setattr("mercury.runtime.call_frontier_provider", fake)
+    monkeypatch.setattr("mercury_runtime.runtime.call_frontier_provider", fake)
     runtime = _runtime(tmp_path)
     result = run_ab(
         runtime,
@@ -82,7 +85,7 @@ def test_control_arm_has_no_system_prompt_and_pack_arm_does(tmp_path, workspace,
 
 
 def test_arms_run_in_isolated_copies_and_leave_the_store_and_workspace_alone(tmp_path, workspace, monkeypatch):
-    monkeypatch.setattr("mercury.runtime.call_frontier_provider", _FakeModel())
+    monkeypatch.setattr("mercury_runtime.runtime.call_frontier_provider", _FakeModel())
     runtime = _runtime(tmp_path)
     traces_before = runtime.harness.stats()["traces"]
     cards_before = runtime.harness.stats()["cards"]
@@ -108,7 +111,7 @@ def test_synth_mode_is_flagged_not_measurable(tmp_path, workspace):
 
 
 def test_cli_no_pack_prints_side_by_side_and_logs(tmp_path, workspace, monkeypatch, capsys):
-    monkeypatch.setattr("mercury.runtime.call_frontier_provider", _FakeModel())
+    monkeypatch.setattr("mercury_runtime.runtime.call_frontier_provider", _FakeModel())
     store = tmp_path / "s"
     code = main(["--store", str(store), "run", "--no-pack", "--task", "Change the greeting in app.py", "--mode", "live"])
     out = capsys.readouterr().out

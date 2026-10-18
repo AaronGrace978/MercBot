@@ -3,10 +3,9 @@ import pytest
 from mercury import MercuryHarness
 from mercury.demo import frontier_auth_fix, lesser_auth_fail
 from mercury.models import CardKind
-from mercury.providers import FrontierOnlyError
 from mercury.validate import (
     CardValidation,
-    TeacherCardValidator,
+    CompletionCardValidator,
     Verdict,
     build_validation_prompt,
     parse_verdict,
@@ -128,7 +127,7 @@ def test_teacher_validator_prompt_and_failure_handling(tmp_path):
         seen.append(prompt)
         return "YES"
 
-    result = TeacherCardValidator(complete=complete).validate(card, trace)
+    result = CompletionCardValidator(complete).validate(card, trace)
     assert result.verdict is Verdict.CONFIRMED
     assert "does this procedure actually match what happened in the trace" in seen[0]
     assert "search_replace" in seen[0] and card.procedure in seen[0]
@@ -136,19 +135,25 @@ def test_teacher_validator_prompt_and_failure_handling(tmp_path):
     def boom(prompt):
         raise RuntimeError("no network")
 
-    failed = TeacherCardValidator(complete=boom).validate(card, trace)
+    failed = CompletionCardValidator(boom).validate(card, trace)
     assert failed.verdict is Verdict.UNCONFIRMED
     assert "no network" in failed.reason
-    assert TeacherCardValidator(complete=complete).validate(card, None).verdict is Verdict.UNCONFIRMED
+    assert CompletionCardValidator(complete).validate(card, None).verdict is Verdict.UNCONFIRMED
     assert "COMPARISON" in build_validation_prompt(card, trace, lesser_auth_fail())
 
 
 def test_teacher_model_must_be_frontier():
+    pytest.importorskip("mercury_runtime")
+    from mercury_runtime.providers import FrontierOnlyError
+    from mercury_runtime.teacher import TeacherCardValidator
+
     with pytest.raises(FrontierOnlyError):
         TeacherCardValidator("gpt-4o-mini")
+    assert TeacherCardValidator("gemini-4-argon-high").model == "gemini-4-argon-high"
 
 
 def test_cli_validate_cards_flag_without_credentials_flags_instead_of_failing(tmp_path, capsys, monkeypatch):
+    pytest.importorskip("mercury_runtime")
     from mercury.cli import main
 
     for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):

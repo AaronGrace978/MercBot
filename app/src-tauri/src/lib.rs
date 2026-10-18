@@ -47,7 +47,17 @@ struct PersistentPythonProcess {
 impl PersistentPythonProcess {
     fn spawn(root: &PathBuf) -> Result<Self, String> {
         let mut child = Command::new("uv")
-            .args(["run", "python", "-m", "mercury", "bridge-worker"])
+            .args([
+                "run",
+                "--with-editable",
+                "./runtime",
+                "--with-editable",
+                "./forge",
+                "python",
+                "-m",
+                "mercury",
+                "bridge-worker",
+            ])
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -148,6 +158,10 @@ fn call_mercury_bridge_oneshot(
     let mut child = Command::new("uv")
         .args([
             "run",
+            "--with-editable",
+            "./runtime",
+            "--with-editable",
+            "./forge",
             "python",
             "-m",
             "mercury",

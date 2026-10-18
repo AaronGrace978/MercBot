@@ -3,7 +3,8 @@
 Distillation is deterministic and will happily write a confident card about a
 procedure the trace never performed. One cheap yes/no call per new card keeps
 those out of the store. The gate is a protocol so tests and offline setups can
-plug in any callable; ``TeacherCardValidator`` is the real-model implementation.
+plug in any callable; ``mercury_runtime.teacher.TeacherCardValidator`` is the real-model
+implementation, kept in the runtime package because it needs the provider adapters.
 """
 
 from __future__ import annotations
@@ -97,23 +98,11 @@ def parse_verdict(reply: str) -> Verdict:
     return Verdict.UNCONFIRMED
 
 
-class TeacherCardValidator:
-    """One teacher-model call per card. Never raises: a failed call is ``unconfirmed``."""
+class CompletionCardValidator:
+    """Validate through any ``prompt -> reply`` callable. Never raises: a failed call is ``unconfirmed``."""
 
-    def __init__(
-        self,
-        model: str = "gemini-4-argon-high",
-        *,
-        api_keys: dict[str, str] | None = None,
-        complete: Callable[[str], str] | None = None,
-    ) -> None:
-        if complete is None:
-            from mercury.providers import get_frontier_model
-
-            get_frontier_model(model)
-        self.model = model
-        self.api_keys = api_keys
-        self._complete = complete or self._call_teacher
+    def __init__(self, complete: Callable[[str], str]) -> None:
+        self._complete = complete
 
     def validate(
         self,
@@ -128,21 +117,7 @@ class TeacherCardValidator:
             reply = self._complete(prompt)
         except Exception as exc:
             return CardValidation(card.id, card.title, Verdict.UNCONFIRMED, f"teacher call failed: {exc}")
-        verdict = parse_verdict(reply)
-        return CardValidation(card.id, card.title, verdict, _clip(reply, 160))
-
-    def _call_teacher(self, prompt: str) -> str:
-        from mercury.providers import call_frontier_provider, get_frontier_model
-
-        spec = get_frontier_model(self.model)
-        turn = call_frontier_provider(
-            spec,
-            [{"role": "user", "content": prompt}],
-            None,
-            api_keys=self.api_keys,
-            allow_offline_fallback=False,
-        )
-        return turn.content
+        return CardValidation(card.id, card.title, parse_verdict(reply), _clip(reply, 160))
 
 
 def _clip(text: Any, limit: int) -> str:

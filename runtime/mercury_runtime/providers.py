@@ -34,6 +34,7 @@ def _load_dotenv() -> None:
     candidates = [
         Path.cwd() / ".env",
         Path(__file__).resolve().parent.parent / ".env",
+        Path(__file__).resolve().parents[2] / ".env",
     ]
     for env_path in candidates:
         if env_path.is_file():

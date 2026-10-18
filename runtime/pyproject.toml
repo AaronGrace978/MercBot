@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mercury-runtime"
+version = "0.4.0"
+description = "Frontier agent runtime, provider adapters and A/B control group for the Mercury flywheel"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "Aaron Grace", email = "aarongrace978@gmail.com" }]
+keywords = ["agents", "runtime", "llm", "providers"]
+dependencies = [
+  "mercury-harness>=0.4.0",
+  "pydantic>=2.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/AaronGrace978/Mercury-Harness"
+
+[tool.setuptools.packages.find]
+include = ["mercury_runtime*"]

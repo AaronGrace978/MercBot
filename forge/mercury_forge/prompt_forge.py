@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-from mercury.providers import FrontierModelSpec
+from mercury_runtime.providers import FrontierModelSpec
 
 if TYPE_CHECKING:
-    from mercury.templates import AppTemplate, AppTemplateFile
+    from mercury_forge.templates import AppTemplate, AppTemplateFile
 
 SHARED_ACID_CSS = """:root {
   --bg: #050c07;
@@ -1725,7 +1725,7 @@ print("PASS: Custom Domain Application Studio verified")
 
 
 def _build_webgl_3d_files(display_name: str, brief: str, model_id: str) -> list[dict[str, str]]:
-    from mercury.webgl_subject import mesh_mode_for_subject, resolve_webgl_subject, subject_bootstrap_js, subject_builder_js
+    from mercury_forge.webgl_subject import mesh_mode_for_subject, resolve_webgl_subject, subject_bootstrap_js, subject_builder_js
 
     subject = resolve_webgl_subject(f"{display_name}\n{brief}")
     mode_for_family = mesh_mode_for_subject(subject)
@@ -2225,7 +2225,7 @@ def _try_live_llm_app_synthesis(
     on_progress: Any | None = None,
 ) -> list[dict[str, str]] | None:
     """Ask the selected frontier model to write the app (validated file blocks + one repair)."""
-    from mercury.app_synthesis import synthesize_app_with_model
+    from mercury_forge.app_synthesis import synthesize_app_with_model
 
     result = synthesize_app_with_model(
         spec,
@@ -2250,8 +2250,8 @@ def synthesize_prompt_driven_template(
     on_progress: Any | None = None,
 ) -> "AppTemplate":
     """Return a prompt-tailored AppTemplate that actually builds what the user asked for."""
-    from mercury.offline_sites import build_dashboard_files, build_landing_page_files
-    from mercury.templates import AppTemplate, AppTemplateFile
+    from mercury_forge.offline_sites import build_dashboard_files, build_landing_page_files
+    from mercury_forge.templates import AppTemplate, AppTemplateFile
 
     archetype = detect_prompt_archetype(display_name, brief)
     if archetype == "telemetry":

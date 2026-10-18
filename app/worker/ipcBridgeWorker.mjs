@@ -21,7 +21,7 @@ function resolvePythonLauncher() {
   if (fs.existsSync(unixVenv)) {
     return { cmd: unixVenv, prefixArgs: [] };
   }
-  return { cmd: "uv", prefixArgs: ["run", "python"] };
+  return { cmd: "uv", prefixArgs: ["run", "--with-editable", "./runtime", "--with-editable", "./forge", "python"] };
 }
 
 function runPythonBridge(action, payload, reqId) {

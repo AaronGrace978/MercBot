@@ -54,10 +54,10 @@ bootstrap() {
     ok "created .venv"
   fi
   local marker="$VENV/.mercury-installed"
-  if [[ ! -f "$marker" || pyproject.toml -nt "$marker" ]]; then
-    say "installing mercury-harness (editable) + dev deps ..."
+  if [[ ! -f "$marker" || pyproject.toml -nt "$marker" || runtime/pyproject.toml -nt "$marker" || forge/pyproject.toml -nt "$marker" ]]; then
+    say "installing mercury-harness + mercury-runtime + mercury-forge (editable) + dev deps ..."
     "$PYBIN" -m pip install --quiet --upgrade pip
-    "$PYBIN" -m pip install --quiet -e ".[dev]"
+    "$PYBIN" -m pip install --quiet -e ".[dev]" -e ./runtime -e ./forge
     touch "$marker"
     ok "install complete"
   fi
